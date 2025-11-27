@@ -168,7 +168,7 @@ export class DirectlineConversationService {
             const transcript: Transcript = {
                 activities: [newActivity]
             };
-            this.socketGateway.sendToConversation(conversationId, transcript);
+            await this.socketGateway.sendToConversation(conversationId, transcript);
             return { id: newActivity.id };
         } catch (err) {
             throw new BadRequestException(`Failed to post to bot endpoint: ${err}`);
@@ -213,7 +213,7 @@ export class DirectlineConversationService {
                     : undefined
         };
         this.logger.verbose(`Bot replies with type: ${newActivity.type}, text: ${newActivity.text}`);
-        this.socketGateway.sendToConversation(conversationId, transcript);
+        await this.socketGateway.sendToConversation(conversationId, transcript);
         return { id: newActivity.id };
     }
 

@@ -65,11 +65,20 @@ export class DirectLineGateway implements OnModuleInit, OnModuleDestroy {
         }
     }
 
-    sendToConversation(convId: string, activityPayload: Transcript) {
-        const wsConnection = this.socketMeta.get(convId);
-        if (wsConnection) {
-            // Direct string transmission
-            wsConnection.send(JSON.stringify(activityPayload));
+    async sendToConversation(convId: string, activityPayload: Transcript) {
+        // Retry three times (if client is taking long to connect)
+        for (let i = 1; i <= 3; i++) {
+            const wsConnection = this.socketMeta.get(convId);
+            if (wsConnection) {
+                // Direct string transmission
+                wsConnection.send(JSON.stringify(activityPayload));
+                return;
+            }
+            // Exponential retry
+            await new Promise(resolve => {
+                setTimeout(resolve, 100 * i);
+            });
         }
+        this.logger.warn(`Could not send transcript to conversation ${convId}`);
     }
 }
