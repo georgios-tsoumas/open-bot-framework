@@ -19,4 +19,4 @@ COPY --from=builder /app/dist ./dist
 
 EXPOSE 1986 1992
 
-CMD ["node", "dist/main"]
+CMD ["node", "dist/src/main"]

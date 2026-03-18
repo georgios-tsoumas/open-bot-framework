@@ -18,8 +18,12 @@ export class StorageService {
     constructor(private configService: ConfigService) {
         this.storageBucket = this.configService.get('STORAGE_BUCKET') || '';
         this.storageEndpoint = this.configService.get('STORAGE_ENDPOINT') || '';
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- see getStorageHandle
-        this.storageHandle = this.getStorageHandle();
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- see getStorageHandle
+            this.storageHandle = this.getStorageHandle();
+        } catch (_: unknown) {
+            console.log(_);
+        }
     }
 
     /**
