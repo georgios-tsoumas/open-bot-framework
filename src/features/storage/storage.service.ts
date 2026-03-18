@@ -4,8 +4,7 @@ https://docs.nestjs.com/providers#services
 
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Upload } from '@aws-sdk/lib-storage';
-import { S3Client } from '@aws-sdk/client-s3';
+import { Client as MinioClient } from 'minio';
 import { Activity } from 'botframework-schema';
 import * as crypto from 'crypto';
 import { UploadDto } from 'src/dto/upload.dto';
@@ -13,10 +12,13 @@ import { UploadDto } from 'src/dto/upload.dto';
 @Injectable()
 export class StorageService {
     private storageBucket: string;
-    private storageHandle: S3Client;
+    private storageEndpoint: string;
+    private storageHandle: MinioClient;
 
     constructor(private configService: ConfigService) {
         this.storageBucket = this.configService.get('STORAGE_BUCKET') || '';
+        this.storageEndpoint = this.configService.get('STORAGE_ENDPOINT') || '';
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- see getStorageHandle
         this.storageHandle = this.getStorageHandle();
     }
 
@@ -61,26 +63,15 @@ export class StorageService {
         callback: (response: { location: string; filename: string }) => void
     ): Promise<void> {
         const { filename, buffer, mimetype } = file;
-        const Key = this.generateObjectKey(filename, conversationId);
-        const parallelUploads3 = new Upload({
-            client: this.storageHandle,
-            params: {
-                Bucket: this.storageBucket,
-                Key,
-                Body: buffer,
-                ContentType: mimetype
-            }
+        const key = this.generateObjectKey(filename, conversationId);
+
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- see getStorageHandle
+        await this.storageHandle.putObject(this.storageBucket, key, buffer, buffer.length, {
+            'Content-Type': mimetype
         });
 
-        // 2. Execute the upload
-        const result = await parallelUploads3.done();
-
-        // 3. Use the Location returned directly from S3
-        if (result.Location) {
-            callback({ location: result.Location, filename });
-        } else {
-            throw new Error('S3 did not return a location.');
-        }
+        const location = `${this.storageEndpoint}/${this.storageBucket}/${key}`;
+        callback({ location, filename });
     }
 
     /**
@@ -110,15 +101,15 @@ export class StorageService {
      *
      * @returns S3Client instance configured for the target storage backend
      */
-    private getStorageHandle(): S3Client {
-        return new S3Client({
-            endpoint: String(this.configService.get('STORAGE_ENDPOINT') || '') || undefined,
-            credentials: {
-                accessKeyId: String(this.configService.get('STORAGE_ACCESS_KEY') || ''),
-                secretAccessKey: String(this.configService.get('STORAGE_SECRET_KEY') || '')
-            },
-            region: String(this.configService.get('STORAGE_REGION_S3') || ''),
-            forcePathStyle: Boolean(this.configService.get('STORAGE_FORCE_S3_PATH_STYLE') || false)
+    private getStorageHandle(): MinioClient {
+        const url = new URL(this.storageEndpoint);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call -- minio v8 uses .js extension imports in its .d.ts files, which moduleResolution:node cannot resolve
+        return new MinioClient({
+            endPoint: url.hostname,
+            port: url.port ? parseInt(url.port) : undefined,
+            useSSL: url.protocol === 'https:',
+            accessKey: String(this.configService.get('STORAGE_ACCESS_KEY') || ''),
+            secretKey: String(this.configService.get('STORAGE_SECRET_KEY') || '')
         });
     }
 }
