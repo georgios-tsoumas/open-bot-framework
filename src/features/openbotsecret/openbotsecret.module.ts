@@ -5,10 +5,11 @@ import { OpenBotSecret } from 'src/entities/openbot.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OpenBotModule } from '../openbot/openbot.module';
 import { OpenBotService } from '../openbot/openbot.service';
+import { JwtAuthGuard } from 'src/guards/jwt-auth.guard';
 
 @Module({
     imports: [TypeOrmModule.forFeature([OpenBotSecret]), OpenBotModule],
-    providers: [OpenBotSecretService, OpenBotService],
+    providers: [OpenBotSecretService, OpenBotService, JwtAuthGuard],
     controllers: [OpenBotSecretController],
     exports: [OpenBotService, TypeOrmModule]
 })

@@ -12,14 +12,17 @@ import {
     HttpCode,
     HttpStatus,
     UsePipes,
+    UseGuards,
     ValidationPipe,
     ParseUUIDPipe
 } from '@nestjs/common';
 import { OpenBotSecretService } from './openbotsecret.service';
 import { OpenBotSecretDto } from 'src/dto/openbot.dto';
 import { PaginatedTransform } from 'src/dto/page.dto';
+import { JwtAuthGuard } from 'src/guards/jwt-auth.guard';
 
 @Controller('bots/:botId/credentials')
+@UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe())
 export class OpenBotSecretController {
     constructor(private readonly openbotsecretService: OpenBotSecretService) {}

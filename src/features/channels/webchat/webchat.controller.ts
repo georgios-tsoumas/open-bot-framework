@@ -11,6 +11,7 @@ import {
     HttpCode,
     HttpStatus,
     UsePipes,
+    UseGuards,
     ValidationPipe,
     ParseUUIDPipe,
     Patch
@@ -18,8 +19,10 @@ import {
 import { WebChatService } from './webchat.service';
 import { WebChatChannelDto } from 'src/dto/webchat.dto';
 import { PaginatedTransform } from 'src/dto/page.dto';
+import { JwtAuthGuard } from 'src/guards/jwt-auth.guard';
 
 @Controller('bots/:botId/webchat')
+@UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe())
 export class WebChatController {
     constructor(private readonly webchatService: WebChatService) {}

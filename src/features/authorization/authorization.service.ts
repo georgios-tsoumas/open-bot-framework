@@ -18,6 +18,37 @@ export class AuthorizationService {
     }
 
     /**
+     * Generate an access token for the admin user given username and password.
+     * Validates credentials against ADMIN_USERNAME and ADMIN_PASSWORD env vars.
+     *
+     * @param username Provided username
+     * @param password Provided password
+     * @returns AccessTokenResponseDto containing token_type, expires_in and access_token
+     * @throws UnauthorizedException if credentials do not match
+     */
+    generateUserToken(username: string, password: string): AccessTokenResponseDto {
+        const adminUsername = this.configService.get<string>('ADMIN_USERNAME');
+        const adminPassword = this.configService.get<string>('ADMIN_PASSWORD');
+
+        if (!adminUsername || !adminPassword || username !== adminUsername || password !== adminPassword) {
+            throw new UnauthorizedException('Invalid credentials');
+        }
+
+        const tokenPayload = { sub: username };
+
+        const accessToken = this.jwtService.sign(tokenPayload, {
+            algorithm: 'HS256',
+            expiresIn: this.expirationSeconds
+        });
+
+        return {
+            token_type: 'Bearer',
+            expires_in: this.expirationSeconds,
+            access_token: accessToken
+        };
+    }
+
+    /**
      * Verify an access token (server-to-server) and return decoded payload.
      *
      * @param token JWT string to verify

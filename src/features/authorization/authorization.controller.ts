@@ -1,11 +1,13 @@
-import { Body, Controller, HttpException, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, HttpException, HttpStatus, Post, UsePipes, ValidationPipe } from '@nestjs/common';
 import { AuthorizationService } from './authorization.service';
-import { AccessTokenRequestDto } from 'src/dto/token.dto';
+import { AccessTokenRequestDto, LoginDto } from 'src/dto/token.dto';
 
-@Controller('oauth2/v2.0')
+@Controller()
+@UsePipes(new ValidationPipe())
 export class AuthorizationController {
     constructor(private readonly authorizationService: AuthorizationService) {}
-    @Post('token')
+
+    @Post('oauth2/v2.0/token')
     exchangeToken(@Body() body: AccessTokenRequestDto) {
         const { grant_type, client_id, client_secret, scope } = body;
 
@@ -20,5 +22,10 @@ export class AuthorizationController {
 
         // Delegate to service
         return this.authorizationService.generateAccessToken(client_id, client_secret, scope);
+    }
+
+    @Post('login')
+    login(@Body() body: LoginDto) {
+        return this.authorizationService.generateUserToken(body.username, body.password);
     }
 }

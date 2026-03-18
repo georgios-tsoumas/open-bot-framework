@@ -13,12 +13,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const isHttpException = exception instanceof HttpException;
         const status = isHttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
         const message = isHttpException ? exception.message : String(exception);
-        const description = isHttpException ? JSON.stringify(exception.getResponse()) : '';
+        const description = isHttpException ? exception.getResponse() : '';
 
         if (status === HttpStatus.INTERNAL_SERVER_ERROR.valueOf()) {
-            this.logger.error(`${message}. ${description}`);
+            this.logger.error(`${message}. ${JSON.stringify(description)}`);
         } else {
-            this.logger.verbose(`${message}. ${description}`);
+            this.logger.verbose(`${message}. ${JSON.stringify(description)}`);
         }
 
         response.status(status).send({
