@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { OpenBotSecretService } from '../openbotsecret/openbotsecret.service';
 import { AccessTokenResponseDto } from 'src/dto/token.dto';
 import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class AuthorizationService {
@@ -26,11 +27,16 @@ export class AuthorizationService {
      * @returns AccessTokenResponseDto containing token_type, expires_in and access_token
      * @throws UnauthorizedException if credentials do not match
      */
-    generateUserToken(username: string, password: string): AccessTokenResponseDto {
+    async generateUserToken(username: string, password: string): Promise<AccessTokenResponseDto> {
         const adminUsername = this.configService.get<string>('ADMIN_USERNAME');
-        const adminPassword = this.configService.get<string>('ADMIN_PASSWORD');
+        const adminPasswordHash = this.configService.get<string>('ADMIN_PASSWORD');
 
-        if (!adminUsername || !adminPassword || username !== adminUsername || password !== adminPassword) {
+        if (!adminUsername || !adminPasswordHash || username !== adminUsername) {
+            throw new UnauthorizedException('Invalid credentials');
+        }
+
+        const isPasswordValid = await bcrypt.compare(password, adminPasswordHash);
+        if (!isPasswordValid) {
             throw new UnauthorizedException('Invalid credentials');
         }
 
