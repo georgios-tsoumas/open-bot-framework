@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm'; // added import
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
+import { DataSourceOptions } from 'typeorm';
 import { OpenBotModule } from './features/openbot/openbot.module';
 import { OpenBotsecretModule } from './features/openbotsecret/openbotsecret.module';
 import { WebChatModule } from './features/channels/webchat/webchat.module';
@@ -32,7 +32,7 @@ import { JwtModule } from '@nestjs/jwt';
             imports: [ConfigModule],
             useFactory: (configService: ConfigService) =>
                 ({
-                    type: configService.get('TYPEORM_CONNECTION') as 'postgres',
+                    type: configService.get('TYPEORM_CONNECTION') as DataSourceOptions['type'],
                     host: configService.get('TYPEORM_HOST'),
                     port: Number(configService.get<number>('TYPEORM_PORT')),
                     username: configService.get('TYPEORM_USERNAME'),
@@ -44,7 +44,7 @@ import { JwtModule } from '@nestjs/jwt';
                     synchronize: true,
                     autoLoadEntities: true,
                     dropSchema: false
-                }) as PostgresConnectionOptions,
+                }) as DataSourceOptions,
             inject: [ConfigService]
         }),
         AuthorizationModule,

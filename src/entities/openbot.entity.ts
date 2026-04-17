@@ -58,7 +58,7 @@ export class OpenBotSecret {
     @CreateDateColumn()
     createdAt: Date;
 
-    @Column({ type: 'timestamptz', nullable: true })
+    @Column({ nullable: true })
     expiresAt: Date;
 
     @Column()
