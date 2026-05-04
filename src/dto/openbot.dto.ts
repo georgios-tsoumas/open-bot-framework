@@ -5,7 +5,7 @@ export class OpenBotDto {
     @ValidateBy({
         name: 'IsBotHandle',
         validator: {
-            validate: v => typeof v === 'string' && /^[a-zA-Z][a-zA-Z0-9-]{2,62}[a-zA-Z0-9]$/.test(v),
+            validate: v => typeof v === 'string' && /^[a-zA-Z][a-zA-Z0-9-_]{2,62}[a-zA-Z0-9]$/.test(v),
             defaultMessage: () => 'Invalid bot handle format'
         }
     })
