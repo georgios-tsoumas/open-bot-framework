@@ -182,14 +182,16 @@ export class DirectlineConversationService {
      * @param conversationId Conversation id
      * @param activity Activity payload being sent by bot
      * @param authorizationHeader Server access token header
-     * @param replyToActivity Activity id this message replies to
+     * @param replyToActivity Optional activity id this message replies to. Omitted for non-reply
+     *        sends (Bot Framework `POST /v3/conversations/{conversationId}/activities`) used by
+     *        livechat agents and bot-initiated messages.
      * @returns Promise resolving with { id: newActivity.id }
      */
     async replyToActivity(
         conversationId: string,
         activity: Activity,
         authorizationHeader: string,
-        replyToActivity: string
+        replyToActivity?: string
     ) {
         const token = AuthorizationUtils.removeBearer(authorizationHeader);
         if (!token) {
@@ -198,8 +200,9 @@ export class DirectlineConversationService {
         // Validate signature
         this.authorizationService.verifyAccessToken(token);
 
-        // Reply is required when coming from bot
-        activity.replyToId = replyToActivity;
+        if (replyToActivity) {
+            activity.replyToId = replyToActivity;
+        }
 
         // Create the activity
         const newActivity = await this.createActivity(conversationId, activity);

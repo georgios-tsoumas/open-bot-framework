@@ -16,4 +16,14 @@ export class DirectlineAltController {
     ): unknown {
         return this.directLineService.replyToActivity(convId, activity, securityKey, activityId);
     }
+
+    @Post('conversations/:convId/activities')
+    @HttpCode(200)
+    sendToConversation(
+        @Param('convId') convId: string,
+        @Body() activity: Activity,
+        @Headers('authorization') securityKey: string
+    ): unknown {
+        return this.directLineService.replyToActivity(convId, activity, securityKey);
+    }
 }
