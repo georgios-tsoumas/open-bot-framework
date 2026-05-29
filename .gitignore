@@ -3,6 +3,10 @@
 /node_modules
 /build
 
+# client (UI) build artifacts and deps
+/client/dist
+/client/node_modules
+
 # Logs
 logs
 *.log

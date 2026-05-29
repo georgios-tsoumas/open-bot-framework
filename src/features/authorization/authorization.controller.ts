@@ -24,7 +24,7 @@ export class AuthorizationController {
         return this.authorizationService.generateAccessToken(client_id, client_secret, scope);
     }
 
-    @Post('login')
+    @Post('api/login')
     login(@Body() body: LoginDto) {
         return this.authorizationService.generateUserToken(body.username, body.password);
     }

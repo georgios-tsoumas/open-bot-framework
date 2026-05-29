@@ -20,7 +20,7 @@ import { OpenBotDto } from 'src/dto/openbot.dto';
 import { PaginatedTransform } from 'src/dto/page.dto';
 import { JwtAuthGuard } from 'src/guards/jwt-auth.guard';
 
-@Controller('bots')
+@Controller('api/bots')
 @UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe())
 export class OpenBotController {

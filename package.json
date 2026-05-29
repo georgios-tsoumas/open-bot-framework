@@ -5,8 +5,15 @@
   "author": "Georgios Tsoumas",
   "private": true,
   "license": "GPL-3.0-only",
+  "workspaces": [
+    "client"
+  ],
   "scripts": {
     "build": "nest build",
+    "build:client": "npm --prefix client run build",
+    "build:all": "npm run build:client && npm run build",
+    "client:install": "npm --prefix client install",
+    "client:dev": "npm --prefix client run dev",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -26,6 +33,7 @@
   },
   "dependencies": {
     "@fastify/multipart": "^9.3.0",
+    "@fastify/static": "^8.3.0",
     "@nestjs/axios": "^4.0.1",
     "@nestjs/cache-manager": "^3.0.1",
     "@nestjs/common": "^11.0.1",
@@ -35,6 +43,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/platform-fastify": "^11.1.6",
     "@nestjs/platform-ws": "^11.1.8",
+    "@nestjs/serve-static": "^5.0.5",
     "@nestjs/typeorm": "^11.0.0",
     "@nestjs/websockets": "^11.1.8",
     "@types/multer": "^2.0.0",

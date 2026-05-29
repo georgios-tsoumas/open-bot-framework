@@ -21,7 +21,7 @@ import { WebChatChannelDto } from 'src/dto/webchat.dto';
 import { PaginatedTransform } from 'src/dto/page.dto';
 import { JwtAuthGuard } from 'src/guards/jwt-auth.guard';
 
-@Controller('bots/:botId/webchat')
+@Controller('api/bots/:botId/webchat')
 @UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe())
 export class WebChatController {

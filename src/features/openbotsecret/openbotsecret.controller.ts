@@ -21,7 +21,7 @@ import { OpenBotSecretDto } from 'src/dto/openbot.dto';
 import { PaginatedTransform } from 'src/dto/page.dto';
 import { JwtAuthGuard } from 'src/guards/jwt-auth.guard';
 
-@Controller('bots/:botId/credentials')
+@Controller('api/bots/:botId/credentials')
 @UseGuards(JwtAuthGuard)
 @UsePipes(new ValidationPipe())
 export class OpenBotSecretController {

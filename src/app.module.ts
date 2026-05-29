@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm'; // added import
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { DataSourceOptions } from 'typeorm';
 import { OpenBotModule } from './features/openbot/openbot.module';
@@ -14,6 +14,10 @@ import { JwtModule } from '@nestjs/jwt';
 
 @Module({
     imports: [
+        ServeStaticModule.forRoot({
+            rootPath: join(process.cwd(), 'client', 'dist'),
+            exclude: ['/api/{*splat}', '/v3/{*splat}', '/oauth2/{*splat}']
+        }),
         CacheModule.register({ isGlobal: true }),
         ConfigModule.forRoot({
             envFilePath: ['.env.local', '.env'],
@@ -52,7 +56,7 @@ import { JwtModule } from '@nestjs/jwt';
         OpenBotsecretModule,
         WebChatModule
     ],
-    controllers: [AppController],
-    providers: [AppService]
+    controllers: [],
+    providers: []
 })
 export class AppModule {}
