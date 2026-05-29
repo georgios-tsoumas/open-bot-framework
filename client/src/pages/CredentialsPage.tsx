@@ -67,7 +67,7 @@ export const CredentialsPage: React.FC = () => {
           >
             ← Back to bot
           </button>
-          <h1 className="text-2xl font-semibold text-content">Credentials</h1>
+          <h1 className="text-2xl font-semibold text-content">Client credentials</h1>
           <p className="text-sm text-content-muted mt-1">API keys for OAuth2 client-credentials</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
@@ -114,13 +114,21 @@ export const CredentialsPage: React.FC = () => {
                   <Trash2 className="h-3.5 w-3.5 text-red-500" />
                 </Button>
               </div>
-              <div className="mt-3 pt-3 border-t border-border">
-                <p className="text-[10px] uppercase tracking-wider text-content-subtle mb-1">
-                  Secret preview
-                </p>
-                <code className="text-xs text-content-muted break-all">
-                  {cred.secret?.substring(0, 12)}…
-                </code>
+              <div className="mt-3 pt-3 border-t border-border space-y-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-content-subtle mb-1">
+                    Client ID
+                  </p>
+                  <code className="text-xs text-content-muted break-all">{cred.secretId}</code>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-content-subtle mb-1">
+                    Client secret
+                  </p>
+                  <code className="text-xs text-content-muted break-all">
+                    {cred.secret?.substring(0, 12)}…
+                  </code>
+                </div>
               </div>
             </Card>
           ))}

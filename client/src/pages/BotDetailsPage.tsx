@@ -88,7 +88,6 @@ export const BotDetailsPage: React.FC = () => {
           Information
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 text-sm">
-          <Field label="Bot ID" value={bot.id} mono />
           <Field label="Handle" value={bot.handle} mono />
           <Field label="Schema version" value={bot.schemaVersion} />
           <Field label="Endpoint" value={bot.endpoint} mono />
