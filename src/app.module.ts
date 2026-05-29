@@ -16,7 +16,10 @@ import { JwtModule } from '@nestjs/jwt';
     imports: [
         ServeStaticModule.forRoot({
             rootPath: join(process.cwd(), 'client', 'dist'),
-            exclude: ['/api/{*splat}', '/v3/{*splat}', '/oauth2/{*splat}']
+            // Fastify's serve-static loader ignores `exclude` and only serves the
+            // SPA index fallback ('*') when `fallthrough` is enabled; without it
+            // `/` and client-side routes return 404.
+            serveStaticOptions: { fallthrough: true }
         }),
         CacheModule.register({ isGlobal: true }),
         ConfigModule.forRoot({
