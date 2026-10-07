@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException } from '@nestjs/common';
+import { BadRequestException, HttpException, UnauthorizedException } from '@nestjs/common';
 import { FastifyRequest } from 'fastify';
 import { DirectlineConversationService } from './directline-conversation.service';
 import { DirectlineTokenService } from './dirtectline-token.service';
@@ -25,13 +25,27 @@ const requestWith = (...parts: Part[]) =>
 
 describe('DirectlineController upload', () => {
     const userReplyToConversation = jest.fn().mockResolvedValue({ id: 'conv1|0000001' });
+    const verifyConversationToken = jest.fn();
     const controller = new DirectlineController(
-        { userReplyToConversation } as unknown as DirectlineConversationService,
+        { userReplyToConversation, verifyConversationToken } as unknown as DirectlineConversationService,
         {} as DirectlineTokenService
     );
 
     beforeEach(() => {
         userReplyToConversation.mockClear();
+        verifyConversationToken.mockReset();
+    });
+
+    it('does not read any part when the token is rejected', async () => {
+        verifyConversationToken.mockImplementation(() => {
+            throw new UnauthorizedException();
+        });
+        const toBuffer = jest.fn();
+        const req = requestWith({ ...filePart('file', 'data'), toBuffer });
+        await expect(controller.uploadToConversation('conv1', 'Bearer bad', '', req)).rejects.toThrow(
+            UnauthorizedException
+        );
+        expect(toBuffer).not.toHaveBeenCalled();
     });
 
     it('passes the activity and files to the service', async () => {

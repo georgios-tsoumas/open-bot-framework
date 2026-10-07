@@ -144,15 +144,7 @@ export class DirectlineConversationService {
         authorizationHeader: string,
         files?: UploadDto[]
     ): Promise<unknown> {
-        const token = AuthorizationUtils.removeBearer(authorizationHeader);
-        if (!token) {
-            throw new BadRequestException('Wrong type of token provided. Provide Bearer');
-        }
-        // Validate signature
-        const validPayload = this.directLineTokenService.verifyDirectLineToken(token);
-        if (conversationId !== validPayload.conv) {
-            throw new UnauthorizedException('Token does not belong to this conversation');
-        }
+        const validPayload = this.verifyConversationToken(conversationId, authorizationHeader);
         this.assertActivity(activity);
 
         // Set bot recipient
@@ -261,6 +253,23 @@ export class DirectlineConversationService {
         activity.conversation = { id: conversationId, isGroup: false, conversationType: '', name: '' };
 
         return activity;
+    }
+
+    /**
+     * Verify a DirectLine token from an Authorization header and check it belongs to the conversation.
+     *
+     * @throws BadRequestException if the header is missing, UnauthorizedException / ForbiddenException if the token is not valid
+     */
+    verifyConversationToken(conversationId: string, authorizationHeader: string): DirectLineTokenPayload {
+        const token = AuthorizationUtils.removeBearer(authorizationHeader);
+        if (!token) {
+            throw new BadRequestException('Wrong type of token provided. Provide Bearer');
+        }
+        const validPayload = this.directLineTokenService.verifyDirectLineToken(token);
+        if (conversationId !== validPayload.conv) {
+            throw new UnauthorizedException('Token does not belong to this conversation');
+        }
+        return validPayload;
     }
 
     private assertActivity(activity: unknown): asserts activity is Activity {

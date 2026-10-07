@@ -109,6 +109,8 @@ export class DirectlineController {
         @Query('userId') userId: string,
         @Req() req: FastifyRequest
     ): Promise<unknown> {
+        // Check the token first: reading the parts buffers every file in memory
+        this.directLineService.verifyConversationToken(convId, securityKey);
         const parts = req.parts();
         const files: UploadDto[] = [];
         let activity: Activity | undefined = undefined;
