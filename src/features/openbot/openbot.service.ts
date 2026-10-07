@@ -71,7 +71,7 @@ export class OpenBotService {
                 }
                 throw new NotFoundException();
             },
-            10
+            10_000
         );
     }
 

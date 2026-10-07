@@ -70,7 +70,7 @@ export class WebChatService {
      */
     async findByIdCached(id: string, relations?: string[]): Promise<WebChatChannel | null> {
         const key = `webchat:${id}:${(relations ?? []).join(',')}`;
-        return this.cacheManager.wrap(key, () => this.findById(id, relations), 10);
+        return this.cacheManager.wrap(key, () => this.findById(id, relations), 10_000);
     }
 
     /**
@@ -91,7 +91,7 @@ export class WebChatService {
      * @returns True if the channel exists, false otherwise.
      */
     async existsByIdCached(id: string): Promise<boolean> {
-        return this.cacheManager.wrap(id, () => this.webchatRepository.exists({ where: { id } }), 10);
+        return this.cacheManager.wrap(id, () => this.webchatRepository.exists({ where: { id } }), 10_000);
     }
 
     /**

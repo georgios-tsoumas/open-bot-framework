@@ -80,7 +80,7 @@ export class OpenBotSecretService {
                 if (secret) return secret;
                 throw new NotFoundException();
             },
-            10
+            10_000
         );
     }
 
