@@ -64,7 +64,13 @@ export class DirectlineTokenService {
         }
         // Find webchat site
         const webChatSite = await this.webChatService.findByIdCached(siteId, ['openBot']);
-        if (!webChatSite) {
+        if (
+            !webChatSite ||
+            !(
+                AuthorizationUtils.secretsMatch(secret, webChatSite.secret1) ||
+                AuthorizationUtils.secretsMatch(secret, webChatSite.secret2)
+            )
+        ) {
             throw new UnauthorizedException();
         }
         // Prepare creating the payload

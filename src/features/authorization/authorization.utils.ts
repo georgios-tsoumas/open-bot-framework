@@ -13,6 +13,16 @@ export class AuthorizationUtils {
         return crypto.createHash('sha256').update(payload).digest('hex');
     }
 
+    /**
+     * Constant-time string comparison. Hashing first gives equal-length buffers for timingSafeEqual.
+     */
+    static secretsMatch(provided: string, expected: string): boolean {
+        return crypto.timingSafeEqual(
+            crypto.createHash('sha256').update(provided).digest(),
+            crypto.createHash('sha256').update(expected).digest()
+        );
+    }
+
     static createSecret(length: number): string {
         const bytes = crypto.randomBytes(length);
         return bytes.toString('base64url');

@@ -81,7 +81,7 @@ export class DirectlineConversationService {
 
         // Secret provided
         if (dots === 1) {
-            const tokenResponse = await this.directLineTokenService.generateToken(securityKey, convRef.user.id);
+            const tokenResponse = await this.directLineTokenService.generateToken(authorizationHeader, convRef.user.id);
             const conversationId = tokenResponse.conversationId;
             const { token } = tokenResponse;
             return {
