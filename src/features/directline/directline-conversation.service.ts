@@ -111,8 +111,14 @@ export class DirectlineConversationService {
         if (!securityKey) {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
         }
-        this.directLineTokenService.verifyDirectLineToken(securityKey);
-        await this.atomicOperationService.set(conversationId, Number(watermark));
+        const validPayload = this.directLineTokenService.verifyDirectLineToken(securityKey);
+        if (conversationId !== validPayload.conv) {
+            throw new UnauthorizedException('Token does not belong to this conversation');
+        }
+        // Clients send no watermark or '-' on a fresh connect. Storing NaN would break the counter.
+        if (/^\d+$/.test(watermark ?? '')) {
+            await this.atomicOperationService.set(conversationId, Number(watermark));
+        }
         return {
             conversationId,
             expires_in: this.expires,

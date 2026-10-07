@@ -75,4 +75,21 @@ describe('DirectlineConversationService', () => {
             expect(http.post).not.toHaveBeenCalled();
         });
     });
+
+    describe('getConversation', () => {
+        it('resets the counter to a numeric watermark', async () => {
+            await service.getConversation('conv1', validToken, '5');
+            expect(atomic.set).toHaveBeenCalledWith('conv1', 5);
+        });
+
+        it.each([undefined, '-', 'abc'])('leaves the counter alone for watermark %s', async watermark => {
+            await service.getConversation('conv1', validToken, watermark as string);
+            expect(atomic.set).not.toHaveBeenCalled();
+        });
+
+        it("rejects a token for another conversation and does not touch that conversation's counter", async () => {
+            await expect(service.getConversation('other-conv', validToken, '0')).rejects.toThrow(UnauthorizedException);
+            expect(atomic.set).not.toHaveBeenCalled();
+        });
+    });
 });
