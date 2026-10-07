@@ -1,4 +1,4 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { JwtService } from '@nestjs/jwt';
@@ -74,9 +74,9 @@ describe('DirectlineConversationService', () => {
             expect(http.post).toHaveBeenCalledWith('http://bot', expect.anything(), expect.anything());
         });
 
-        it('rejects an expired token', async () => {
+        it('rejects an expired token with 403', async () => {
             await expect(service.userReplyToConversation('conv1', activity(), expiredToken)).rejects.toThrow(
-                UnauthorizedException
+                ForbiddenException
             );
             expect(http.post).not.toHaveBeenCalled();
         });

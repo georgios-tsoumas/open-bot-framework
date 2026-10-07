@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { WebChatChannel } from 'src/entities/webchat.entity';
@@ -43,10 +43,19 @@ describe('DirectlineTokenService', () => {
             expect(service.verifyDirectLineToken(response.token)).toMatchObject(payload);
         });
 
-        it('rejects an expired token', async () => {
+        it('rejects an expired token with 403 (what DirectLine clients expect)', async () => {
             await expect(service.refreshToken(`Bearer ${service.createToken(payload, -10)}`)).rejects.toThrow(
-                UnauthorizedException
+                ForbiddenException
             );
+        });
+    });
+
+    describe('verifyDirectLineToken', () => {
+        it.each([
+            ['an admin token', { sub: 'admin', role: 'admin' }],
+            ['a bot token', { sub: 'client-1', aud: 'https://api.botframework.com/.default' }]
+        ])('rejects %s signed with the same secret', (_label, claims) => {
+            expect(() => service.verifyDirectLineToken(jwtService.sign(claims))).toThrow(UnauthorizedException);
         });
     });
 });

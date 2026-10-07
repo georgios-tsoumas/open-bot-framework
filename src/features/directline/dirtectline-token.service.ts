@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { DirectLineTokenPayload, DirectLineTokenResponse } from 'src/dto/directline.dto';
 import { AuthorizationUtils } from '../authorization/authorization.utils';
 import { WebChatService } from '../channels/webchat/webchat.service';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { TokenExpiredError } from 'jsonwebtoken';
 
 @Injectable()
 export class DirectlineTokenService {
@@ -128,13 +129,23 @@ export class DirectlineTokenService {
      *
      * @param token Token string to verify
      * @returns DirectLineTokenPayload parsed from token
-     * @throws UnauthorizedException when token is invalid or verification fails
+     * @throws ForbiddenException when the token has expired (DirectLine clients treat 403 as "get a new token")
+     * @throws UnauthorizedException when the token is invalid or is not a DirectLine token
      */
     verifyDirectLineToken(token: string): DirectLineTokenPayload {
+        let payload: DirectLineTokenPayload;
         try {
-            return this.jwtService.verify<DirectLineTokenPayload>(token);
+            payload = this.jwtService.verify<DirectLineTokenPayload>(token);
         } catch (e: unknown) {
+            if (e instanceof TokenExpiredError) {
+                throw new ForbiddenException('Token expired');
+            }
             throw new UnauthorizedException(`Invalid token. ${String(e)}`);
         }
+        // Admin and bot tokens share JWT_SECRET; only DirectLine tokens carry conv and site
+        if (typeof payload.conv !== 'string' || typeof payload.site !== 'string' || payload.role) {
+            throw new UnauthorizedException('Not a DirectLine token');
+        }
+        return payload;
     }
 }
