@@ -1,9 +1,19 @@
-import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+    BadRequestException,
+    Injectable,
+    Logger,
+    OnModuleDestroy,
+    OnModuleInit,
+    UnauthorizedException
+} from '@nestjs/common';
 import { Server as WSServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import { Transcript } from 'botframework-schema';
 import { ConfigService } from '@nestjs/config';
 import { DirectlineTokenService } from './dirtectline-token.service';
+
+// RFC 6455 close code: the connection was refused for a policy reason (bad or missing token)
+const POLICY_VIOLATION = 1008;
 
 @Injectable()
 export class DirectLineGateway implements OnModuleInit, OnModuleDestroy {
@@ -23,38 +33,46 @@ export class DirectLineGateway implements OnModuleInit, OnModuleDestroy {
     onModuleInit() {
         this.wss = new WSServer({ port: this.socketPort });
 
-        this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-            const url = (req && req.url) || '';
-            try {
-                const parsedUrl = new URL(`wss://server${url}`);
-                // Verify token
-                const token = parsedUrl.searchParams.get('t');
-                if (token !== null) {
-                    const directLineTokenPayload = this.directLineTokenService.verifyDirectLineToken(token);
-                    // User authenticated here
-                    const match = parsedUrl.pathname.match(/^\/v3\/directline\/conversations\/([^/]+)\/stream$/);
-                    if (!match || match[1] !== directLineTokenPayload.conv) {
-                        throw new BadRequestException('Erroneous link');
-                    }
-                    this.socketMeta.set(directLineTokenPayload.conv, ws);
-                    this.logger.verbose(`Web-socket connected for conversation ${directLineTokenPayload.conv}`);
-                }
-            } catch (e: unknown) {
-                ws.send(JSON.stringify({ error: e }));
-                ws.close();
-                return;
-            }
-
-            ws.on('error', (err: Error) => {
-                this.logger.error(`WebSocket error ${err}`);
-            });
-        });
+        this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => this.handleConnection(ws, req));
 
         this.wss.on('listening', () => {
             this.logger.log('WebSocket server started');
         });
 
         this.wss.on('error', (err: Error) => {
+            this.logger.error(`WebSocket error ${err}`);
+        });
+    }
+
+    handleConnection(ws: WebSocket, req: IncomingMessage) {
+        let conv: string;
+        try {
+            const parsedUrl = new URL(`wss://server${req?.url ?? ''}`);
+            const token = parsedUrl.searchParams.get('t');
+            if (token === null) {
+                throw new UnauthorizedException('Missing token');
+            }
+            const directLineTokenPayload = this.directLineTokenService.verifyDirectLineToken(token);
+            const match = parsedUrl.pathname.match(/^\/v3\/directline\/conversations\/([^/]+)\/stream$/);
+            if (!match || match[1] !== directLineTokenPayload.conv) {
+                throw new BadRequestException('Erroneous link');
+            }
+            conv = directLineTokenPayload.conv;
+        } catch (e: unknown) {
+            ws.send(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+            ws.close(POLICY_VIOLATION);
+            return;
+        }
+
+        // A newer socket for the same conversation replaces this one; only remove the entry we own
+        this.socketMeta.set(conv, ws);
+        this.logger.verbose(`Web-socket connected for conversation ${conv}`);
+        ws.on('close', () => {
+            if (this.socketMeta.get(conv) === ws) {
+                this.socketMeta.delete(conv);
+            }
+        });
+        ws.on('error', (err: Error) => {
             this.logger.error(`WebSocket error ${err}`);
         });
     }
