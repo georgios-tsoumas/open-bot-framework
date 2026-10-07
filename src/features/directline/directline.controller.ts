@@ -1,4 +1,16 @@
-import { Body, Controller, Headers, Param, Post, HttpCode, Get, Query, Req, BadRequestException } from '@nestjs/common';
+import {
+    Body,
+    Controller,
+    Headers,
+    Param,
+    Post,
+    HttpCode,
+    Get,
+    Query,
+    Req,
+    BadRequestException,
+    HttpException
+} from '@nestjs/common';
 import { Activity, ConversationReference } from 'botframework-schema';
 import { DirectLineTokenResponse } from 'src/dto/directline.dto';
 import { DirectlineConversationService } from './directline-conversation.service';
@@ -101,26 +113,43 @@ export class DirectlineController {
         const files: UploadDto[] = [];
         let activity: Activity | undefined = undefined;
 
-        for await (const part of parts) {
-            if (part.type === 'file') {
-                const buffer = await part.toBuffer();
-                if (part.fieldname === 'file') {
-                    files.push({
-                        filename: part.filename,
-                        mimetype: part.mimetype,
-                        fieldname: part.fieldname,
-                        buffer
-                    });
-                } else if (part.fieldname === 'activity') {
-                    activity = JSON.parse(buffer.toLocaleString()) as Activity;
+        try {
+            for await (const part of parts) {
+                if (part.type === 'file') {
+                    const buffer = await part.toBuffer();
+                    if (part.fieldname === 'file') {
+                        files.push({
+                            filename: part.filename,
+                            mimetype: part.mimetype,
+                            fieldname: part.fieldname,
+                            buffer
+                        });
+                    } else if (part.fieldname === 'activity') {
+                        activity = this.parseActivity(buffer);
+                    }
                 }
             }
+        } catch (e: unknown) {
+            // Multipart limit errors (file too large, too many parts) carry their own 4xx status
+            const statusCode = (e as { statusCode?: unknown }).statusCode;
+            if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+                throw new HttpException((e as Error).message, statusCode);
+            }
+            throw e;
         }
 
         if (!activity) {
             throw new BadRequestException('Activity is missing from multipart');
         }
         return this.directLineService.userReplyToConversation(convId, activity, securityKey, files);
+    }
+
+    private parseActivity(buffer: Buffer): Activity {
+        try {
+            return JSON.parse(buffer.toString()) as Activity;
+        } catch {
+            throw new BadRequestException('Activity part is not valid JSON');
+        }
     }
 
     /**

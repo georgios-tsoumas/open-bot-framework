@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { JwtService } from '@nestjs/jwt';
@@ -56,6 +56,12 @@ describe('DirectlineConversationService', () => {
             const response = await service.createConversation({ user: { id: 'u1' } } as never, 'Bearer site1.secret');
             expect(response.streamUrl).toContain(`/conversations/${response.conversationId}/stream`);
         });
+
+        it('rejects a request with no body', async () => {
+            await expect(service.createConversation(undefined as never, validToken)).rejects.toThrow(
+                BadRequestException
+            );
+        });
     });
 
     describe('userReplyToConversation', () => {
@@ -71,6 +77,13 @@ describe('DirectlineConversationService', () => {
         it('rejects an expired token', async () => {
             await expect(service.userReplyToConversation('conv1', activity(), expiredToken)).rejects.toThrow(
                 UnauthorizedException
+            );
+            expect(http.post).not.toHaveBeenCalled();
+        });
+
+        it.each([null, 'abc', 42, []])('rejects a non-object body (%p)', async body => {
+            await expect(service.userReplyToConversation('conv1', body as never, validToken)).rejects.toThrow(
+                BadRequestException
             );
             expect(http.post).not.toHaveBeenCalled();
         });

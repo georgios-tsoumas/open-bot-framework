@@ -53,7 +53,7 @@ export class DirectlineConversationService {
         if (!securityKey) {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
         }
-        if (!convRef.user?.id) {
+        if (!convRef?.user?.id) {
             throw new BadRequestException('No user provided');
         }
 
@@ -153,6 +153,7 @@ export class DirectlineConversationService {
         if (conversationId !== validPayload.conv) {
             throw new UnauthorizedException('Token does not belong to this conversation');
         }
+        this.assertActivity(activity);
 
         // Set bot recipient
         activity.recipient = { id: `${validPayload.bot}@${validPayload.site}`, name: validPayload.bot };
@@ -205,6 +206,7 @@ export class DirectlineConversationService {
         }
         // Validate signature
         await this.authorizationService.verifyBotToken(token);
+        this.assertActivity(activity);
 
         if (replyToActivity) {
             activity.replyToId = replyToActivity;
@@ -259,6 +261,12 @@ export class DirectlineConversationService {
         activity.conversation = { id: conversationId, isGroup: false, conversationType: '', name: '' };
 
         return activity;
+    }
+
+    private assertActivity(activity: unknown): asserts activity is Activity {
+        if (typeof activity !== 'object' || activity === null || Array.isArray(activity)) {
+            throw new BadRequestException('Activity must be a JSON object');
+        }
     }
 
     /**
