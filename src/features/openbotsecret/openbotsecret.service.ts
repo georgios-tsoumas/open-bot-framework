@@ -85,6 +85,23 @@ export class OpenBotSecretService {
     }
 
     /**
+     * Cached lookup for a secret that has not expired.
+     * Never expose in controller
+     *
+     * @param id Secret id
+     * @returns OpenBotSecret entity
+     * @throws NotFoundException if not found, UnauthorizedException if expired
+     */
+    async findValidByIdCached(id: string): Promise<OpenBotSecret> {
+        const openBotSecret = await this.findByIdCached(id);
+        // The cache may hand back a serialized date, so normalize before comparing
+        if (openBotSecret.expiresAt && new Date(openBotSecret.expiresAt).getTime() <= Date.now()) {
+            throw new UnauthorizedException('Secret expired');
+        }
+        return openBotSecret;
+    }
+
+    /**
      * Create and persist a new OpenBotSecret associated with the given bot.
      * Generates a random plain secret, stores a hash and returns the DTO including the plain secret (once).
      *
@@ -140,7 +157,7 @@ export class OpenBotSecretService {
      * @throws UnauthorizedException if secret does not match
      */
     async validateSecretCached(clientId: string, clientSecretPlain: string) {
-        const openBotSecret = await this.findByIdCached(clientId);
+        const openBotSecret = await this.findValidByIdCached(clientId);
         if (openBotSecret.secretHash !== AuthorizationUtils.createHash(clientSecretPlain)) {
             throw new UnauthorizedException('Wrong secret provided');
         }

@@ -14,7 +14,7 @@ export class JwtAuthGuard implements CanActivate {
             throw new UnauthorizedException('Missing authorization token');
         }
 
-        this.authorizationService.verifyAccessToken(token);
+        this.authorizationService.verifyAdminToken(token);
         return true;
     }
 }

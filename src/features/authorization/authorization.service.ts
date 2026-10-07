@@ -4,6 +4,9 @@ import { OpenBotSecretService } from '../openbotsecret/openbotsecret.service';
 import { AccessTokenResponseDto } from 'src/dto/token.dto';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { JwtPayload } from 'jsonwebtoken';
+
+const ADMIN_ROLE = 'admin';
 
 @Injectable()
 export class AuthorizationService {
@@ -40,7 +43,7 @@ export class AuthorizationService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
-        const tokenPayload = { sub: username };
+        const tokenPayload = { sub: username, role: ADMIN_ROLE };
 
         const accessToken = this.jwtService.sign(tokenPayload, {
             algorithm: 'HS256',
@@ -55,15 +58,41 @@ export class AuthorizationService {
     }
 
     /**
-     * Verify an access token (server-to-server) and return decoded payload.
+     * Verify an admin token issued by generateUserToken.
+     * All token types share JWT_SECRET, so the signature alone does not tell them apart.
      *
      * @param token JWT string to verify
-     * @returns AccessTokenResponseDto decoded token payload
-     * @throws UnauthorizedException when verification fails
+     * @throws UnauthorizedException when the token is invalid or is not an admin token
      */
-    verifyAccessToken(token: string): AccessTokenResponseDto {
+    verifyAdminToken(token: string): void {
+        const payload = this.verifyJwt(token);
+        if (payload.role !== ADMIN_ROLE || payload.sub !== this.configService.get<string>('ADMIN_USERNAME')) {
+            throw new UnauthorizedException('Not an admin token');
+        }
+    }
+
+    /**
+     * Verify a bot token issued by generateAccessToken (client credentials).
+     * The subject must be an existing, unexpired client credential.
+     *
+     * @param token JWT string to verify
+     * @throws UnauthorizedException when the token is invalid or is not a bot token
+     */
+    async verifyBotToken(token: string): Promise<void> {
+        const payload = this.verifyJwt(token);
+        if (!payload.sub || payload.role || payload.conv) {
+            throw new UnauthorizedException('Not a bot token');
+        }
         try {
-            return this.jwtService.verify<AccessTokenResponseDto>(token);
+            await this.openBotSecretService.findValidByIdCached(payload.sub);
+        } catch {
+            throw new UnauthorizedException('Not a bot token');
+        }
+    }
+
+    private verifyJwt(token: string): JwtPayload {
+        try {
+            return this.jwtService.verify<JwtPayload>(token);
         } catch (e: unknown) {
             throw new UnauthorizedException(`Invalid token. ${String(e)}`);
         }

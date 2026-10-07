@@ -198,7 +198,7 @@ export class DirectlineConversationService {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
         }
         // Validate signature
-        this.authorizationService.verifyAccessToken(token);
+        await this.authorizationService.verifyBotToken(token);
 
         if (replyToActivity) {
             activity.replyToId = replyToActivity;
