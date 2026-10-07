@@ -101,7 +101,7 @@ export class DirectlineTokenService {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
         }
         // Validate signature
-        const validPayload = this.verifyDirectLineToken(token, true);
+        const validPayload = this.verifyDirectLineToken(token);
 
         // Validate site exists
         const webChatSite = await this.webChatService.existsByIdCached(validPayload.site);
@@ -127,13 +127,12 @@ export class DirectlineTokenService {
      * Verify a DirectLine JWT and return its payload.
      *
      * @param token Token string to verify
-     * @param ignoreExpiration Whether to ignore expiration during verification
      * @returns DirectLineTokenPayload parsed from token
      * @throws UnauthorizedException when token is invalid or verification fails
      */
-    verifyDirectLineToken(token: string, ignoreExpiration: boolean): DirectLineTokenPayload {
+    verifyDirectLineToken(token: string): DirectLineTokenPayload {
         try {
-            return this.jwtService.verify<DirectLineTokenPayload>(token, { ignoreExpiration });
+            return this.jwtService.verify<DirectLineTokenPayload>(token);
         } catch (e: unknown) {
             throw new UnauthorizedException(`Invalid token. ${String(e)}`);
         }

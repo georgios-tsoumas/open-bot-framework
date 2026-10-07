@@ -61,7 +61,7 @@ export class DirectlineConversationService {
         const dots = this.countDots(securityKey);
         // JWT token (need to avoid the costly verify method)
         if (dots === 2) {
-            const validPayload = this.directLineTokenService.verifyDirectLineToken(securityKey, false);
+            const validPayload = this.directLineTokenService.verifyDirectLineToken(securityKey);
             const newPayload: DirectLineTokenPayload = {
                 bot: validPayload.bot,
                 site: validPayload.site,
@@ -111,7 +111,7 @@ export class DirectlineConversationService {
         if (!securityKey) {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
         }
-        this.directLineTokenService.verifyDirectLineToken(securityKey, false);
+        this.directLineTokenService.verifyDirectLineToken(securityKey);
         await this.atomicOperationService.set(conversationId, Number(watermark));
         return {
             conversationId,
@@ -143,7 +143,7 @@ export class DirectlineConversationService {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
         }
         // Validate signature
-        const validPayload = this.directLineTokenService.verifyDirectLineToken(token, true);
+        const validPayload = this.directLineTokenService.verifyDirectLineToken(token);
         if (conversationId !== validPayload.conv) {
             throw new UnauthorizedException('Token does not belong to this conversation');
         }

@@ -23,7 +23,7 @@ describe('DirectlineTokenService', () => {
     describe('generateToken', () => {
         it.each(['site1.first-secret', 'site1.second-secret'])('issues a token for %s', async secret => {
             const response = await service.generateToken(`Bearer ${secret}`);
-            expect(service.verifyDirectLineToken(response.token, false).conv).toBe(response.conversationId);
+            expect(service.verifyDirectLineToken(response.token).conv).toBe(response.conversationId);
         });
 
         it('rejects a made-up secret for a real site', async () => {
@@ -32,6 +32,21 @@ describe('DirectlineTokenService', () => {
 
         it('rejects an unknown site', async () => {
             await expect(service.generateToken('Bearer nope.first-secret')).rejects.toThrow(UnauthorizedException);
+        });
+    });
+
+    describe('refreshToken', () => {
+        const payload = { bot: 'bot', site: 'site1', conv: 'conv1', user: 'u1' };
+
+        it('refreshes a valid token for the same conversation', async () => {
+            const response = await service.refreshToken(`Bearer ${service.createToken(payload, 60)}`);
+            expect(service.verifyDirectLineToken(response.token)).toMatchObject(payload);
+        });
+
+        it('rejects an expired token', async () => {
+            await expect(service.refreshToken(`Bearer ${service.createToken(payload, -10)}`)).rejects.toThrow(
+                UnauthorizedException
+            );
         });
     });
 });

@@ -30,7 +30,7 @@ export class DirectLineGateway implements OnModuleInit, OnModuleDestroy {
                 // Verify token
                 const token = parsedUrl.searchParams.get('t');
                 if (token !== null) {
-                    const directLineTokenPayload = this.directLineTokenService.verifyDirectLineToken(token, false);
+                    const directLineTokenPayload = this.directLineTokenService.verifyDirectLineToken(token);
                     // User authenticated here
                     const match = parsedUrl.pathname.match(/^\/v3\/directline\/conversations\/([^/]+)\/stream$/);
                     if (!match || match[1] !== directLineTokenPayload.conv) {
