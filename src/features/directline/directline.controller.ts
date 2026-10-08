@@ -18,6 +18,18 @@ import { ConversationResponse } from 'src/dto/conversation.dto';
 import { DirectlineTokenService } from './dirtectline-token.service';
 import { FastifyRequest } from 'fastify';
 import { UploadDto } from 'src/dto/upload.dto';
+import { RouteConfig } from '@nestjs/platform-fastify';
+
+// Limits are read per request, so env changes apply without a code change
+const perIp = (env: string, fallback: number) => ({
+    rateLimit: { max: () => Number(process.env[env]) || fallback, timeWindow: 60_000 }
+});
+const perConversation = (env: string, fallback: number) => ({
+    rateLimit: {
+        ...perIp(env, fallback).rateLimit,
+        keyGenerator: (req: FastifyRequest) => (req.params as { convId: string }).convId
+    }
+});
 
 @Controller('v3/directline')
 export class DirectlineController {
@@ -36,6 +48,7 @@ export class DirectlineController {
      * @throws BadRequestException if header missing/invalid, UnauthorizedException on invalid secret
      */
     @Post('tokens/generate')
+    @RouteConfig(perIp('RATE_LIMIT_TOKENS_PER_MINUTE', 30))
     @HttpCode(200)
     generateToken(@Headers('authorization') webChatSecret: string): Promise<DirectLineTokenResponse> {
         return this.directLineTokenService.generateToken(webChatSecret);
@@ -50,6 +63,7 @@ export class DirectlineController {
      * @throws BadRequestException if header missing/invalid, UnauthorizedException on invalid token
      */
     @Post('tokens/refresh')
+    @RouteConfig(perIp('RATE_LIMIT_TOKENS_PER_MINUTE', 30))
     @HttpCode(200)
     refreshToken(@Headers('authorization') webChatSecret: string): Promise<DirectLineTokenResponse> {
         return this.directLineTokenService.refreshToken(webChatSecret);
@@ -65,6 +79,7 @@ export class DirectlineController {
      * @throws BadRequestException if inputs invalid, UnauthorizedException if key invalid
      */
     @Post('conversations')
+    @RouteConfig(perIp('RATE_LIMIT_TOKENS_PER_MINUTE', 30))
     createConversation(
         @Body() convRef: ConversationReference,
         @Headers('authorization') securityKey: string
@@ -103,6 +118,7 @@ export class DirectlineController {
      * @throws BadRequestException if required parts (activity) are missing or malformed
      */
     @Post('conversations/:convId/upload')
+    @RouteConfig(perConversation('RATE_LIMIT_UPLOADS_PER_MINUTE', 5))
     async uploadToConversation(
         @Param('convId') convId: string,
         @Headers('authorization') securityKey: string,
@@ -166,6 +182,7 @@ export class DirectlineController {
      * @throws BadRequestException / UnauthorizedException on invalid inputs or token
      */
     @Post('conversations/:convId/activities')
+    @RouteConfig(perConversation('RATE_LIMIT_MESSAGES_PER_MINUTE', 20))
     @HttpCode(200)
     createActivity(
         @Param('convId') convId: string,
