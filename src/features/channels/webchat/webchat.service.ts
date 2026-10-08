@@ -70,7 +70,16 @@ export class WebChatService {
      */
     async findByIdCached(id: string, relations?: string[]): Promise<WebChatChannel | null> {
         const key = `webchat:${id}:${(relations ?? []).join(',')}`;
-        return this.cacheManager.wrap(key, () => this.findById(id, relations), 10_000);
+        const cached = await this.cacheManager.get<WebChatChannel>(key);
+        if (cached) {
+            return cached;
+        }
+        // Misses are not cached: the id comes from the caller, so anyone could fill the cache with made-up ids
+        const channel = await this.findById(id, relations);
+        if (channel) {
+            await this.cacheManager.set(key, channel, 10_000);
+        }
+        return channel;
     }
 
     /**
