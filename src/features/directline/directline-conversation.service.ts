@@ -167,6 +167,8 @@ export class DirectlineConversationService {
             const transcript: Transcript = {
                 activities: [newActivity]
             };
+            // Live delivery is best effort: the activity has been accepted and forwarded, so the request succeeds
+            // even when it could not be pushed to a socket (the gateway logs and counts the drop)
             await this.socketGateway.sendToConversation(conversationId, transcript);
             return { id: newActivity.id };
         } catch (err) {
@@ -216,6 +218,8 @@ export class DirectlineConversationService {
                     : undefined
         };
         this.logger.verbose(`Bot replies with type: ${newActivity.type}, text: ${newActivity.text}`);
+        // Live delivery is best effort: the activity has been created, so the bot's request succeeds even when it
+        // could not be pushed to a socket (the gateway logs and counts the drop)
         await this.socketGateway.sendToConversation(conversationId, transcript);
         return { id: newActivity.id };
     }

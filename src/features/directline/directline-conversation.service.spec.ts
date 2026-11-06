@@ -33,9 +33,10 @@ describe('DirectlineConversationService', () => {
     const gateway = { sendToConversation: jest.fn() };
     const http = { post: jest.fn().mockReturnValue(of({})) };
     const openBotService = { findByHandleCached: jest.fn().mockResolvedValue({ endpoint: 'http://bot' }) };
+    const authorizationService = { verifyBotToken: jest.fn().mockResolvedValue(undefined) };
     const service = new DirectlineConversationService(
         configService,
-        {} as AuthorizationService,
+        authorizationService as unknown as AuthorizationService,
         openBotService as unknown as OpenBotService,
         http as unknown as HttpService,
         gateway as unknown as DirectLineGateway,
@@ -86,6 +87,36 @@ describe('DirectlineConversationService', () => {
                 BadRequestException
             );
             expect(http.post).not.toHaveBeenCalled();
+        });
+
+        it('succeeds even when the echo could not be pushed to a socket', async () => {
+            gateway.sendToConversation.mockResolvedValueOnce('no_open_socket');
+            await expect(service.userReplyToConversation('conv1', activity(), validToken)).resolves.toEqual({
+                id: 'conv1|0000001'
+            });
+        });
+    });
+
+    describe('replyToActivity', () => {
+        const activity = () => ({ type: 'message', text: 'hello' }) as Activity;
+
+        it('pushes the reply to the live socket', async () => {
+            await expect(
+                service.replyToActivity('conv1', activity(), 'Bearer bot-token', 'conv1|0000001')
+            ).resolves.toEqual({
+                id: 'conv1|0000001'
+            });
+            expect(gateway.sendToConversation).toHaveBeenCalledWith(
+                'conv1',
+                expect.objectContaining({ activities: [expect.objectContaining({ replyToId: 'conv1|0000001' })] })
+            );
+        });
+
+        it.each(['no_open_socket', 'send_failed'])('succeeds when live delivery reports %s', async outcome => {
+            gateway.sendToConversation.mockResolvedValueOnce(outcome);
+            await expect(service.replyToActivity('conv1', activity(), 'Bearer bot-token')).resolves.toEqual({
+                id: 'conv1|0000001'
+            });
         });
     });
 

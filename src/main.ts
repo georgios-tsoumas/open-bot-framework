@@ -27,6 +27,8 @@ async function bootstrap() {
         origin: true,
         methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS'
     });
+    // SIGTERM/SIGINT run the module shutdown hooks, so the WebSocket gateway drains its clients
+    app.enableShutdownHooks();
     await app.listen(process.env.PORT ?? 1986, '0.0.0.0');
 }
 console.log(` _____                                                                                  _____ 
@@ -49,4 +51,8 @@ console.log(` _____                                                             
  |   |                                                                                  |   | 
  |___|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|___| 
 (_____)                                                                                (_____)`);
-void bootstrap();
+// A listener that cannot bind (e.g. the WebSocket port is taken) takes the process down rather than leaving HTTP up alone
+bootstrap().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+});
