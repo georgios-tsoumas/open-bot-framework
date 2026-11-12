@@ -11,6 +11,8 @@ import { DirectlineModule } from './features/directline/directline.module';
 import { AuthorizationModule } from './features/authorization/authorization.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { JwtModule } from '@nestjs/jwt';
+import { RedisModule } from './features/redis/redis.module';
+import { MigrationRunner } from './database/migration-runner';
 
 @Module({
     imports: [
@@ -26,6 +28,7 @@ import { JwtModule } from '@nestjs/jwt';
             envFilePath: ['.env.local', '.env'],
             isGlobal: true
         }),
+        RedisModule,
         DirectlineModule,
         JwtModule.registerAsync({
             imports: [ConfigModule],
@@ -47,8 +50,9 @@ import { JwtModule } from '@nestjs/jwt';
                     database: configService.get('TYPEORM_DATABASE'),
                     entities: [__dirname + '/**/*.entity{.ts,.js}'],
                     migrations: [__dirname + '/../migrations/*.js'],
-                    migrationsRun: configService.get('TYPEORM_AUTORUN_MIGRATIONS') === 'true',
-                    synchronize: true,
+                    // Schema changes only through migrations, run once under a lock by MigrationRunner
+                    migrationsRun: false,
+                    synchronize: false,
                     autoLoadEntities: true,
                     dropSchema: false
                 }) as DataSourceOptions,
@@ -60,6 +64,6 @@ import { JwtModule } from '@nestjs/jwt';
         WebChatModule
     ],
     controllers: [],
-    providers: []
+    providers: [MigrationRunner]
 })
 export class AppModule {}

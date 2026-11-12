@@ -8,27 +8,9 @@ export class AtomicOperationsService {
     ) {}
 
     /**
-     * Get the numeric value for a key via the underlying manager.
-     * @param key - The key to retrieve.
-     * @returns The numeric value stored for the key.
-     */
-    async get(key: string): Promise<number> {
-        return this.atomicOperationManager.get(key);
-    }
-
-    /**
-     * Set a numeric value for a key via the underlying manager.
-     * @param key - The key to set.
-     * @param value - The numeric value to store.
-     */
-    async set(key: string, value: number): Promise<void> {
-        return this.atomicOperationManager.set(key, value);
-    }
-
-    /**
-     * Increment the counter for a key via the underlying manager.
+     * Take the next sequence number for a key via the underlying manager.
      * @param key - The key to increment.
-     * @returns The result of the increment operation.
+     * @returns The sequence number taken by this call (first is 0).
      */
     async incr(key: string): Promise<number> {
         return this.atomicOperationManager.incr(key);

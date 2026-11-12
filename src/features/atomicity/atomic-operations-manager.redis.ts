@@ -1,49 +1,33 @@
 import { Redis } from 'ioredis';
 import { AtomicOperationsManager } from './atomicity-operations-manager.interface';
 
+/**
+ * How long a conversation's counter lives after its last activity. When it expires, ids restart at
+ * `|0000000` and webchat overwrites the earlier activity with the same id, so it must outlive any
+ * realistic idle period.
+ */
+export const COUNTER_TTL_SECONDS = 86_400;
+
 export class RedisAtomicOperationsManager implements AtomicOperationsManager {
-    private client: Redis;
-
-    constructor(redisClient: Redis) {
-        this.client = redisClient;
-    }
+    constructor(private readonly client: Redis) {}
 
     /**
-     * Get the numeric value stored for the given key in Redis.
-     * Returns 0 when the key is missing or the stored value is not a valid number.
-     * @param key - The Redis key to read.
-     * @returns The numeric value for the key or 0 on missing/invalid value.
-     */
-    async get(key: string): Promise<number> {
-        const res = await this.client.get(key);
-        if (res === null) return 0;
-
-        const n = Number(res);
-        return Number.isFinite(n) ? n : 0;
-    }
-
-    /**
-     * Set the numeric value for the given key in Redis with a 1-hour TTL.
-     * @param key - The Redis key to set.
-     * @param value - The numeric value to store.
-     */
-    async set(key: string, value: number): Promise<void> {
-        await this.client.set(key, String(value), 'EX', 3600);
-    }
-
-    /**
-     * Increment the numeric counter in Redis and ensure a 1-hour expiry.
-     * Returns the new value minus 1 (behaves like the original implementation).
+     * Increment the counter and refresh its TTL in one MULTI, so a crash cannot leave a counter
+     * without an expiry. Returns the new value minus 1, so the first activity gets 0.
      * @param key - The Redis key to increment.
-     * @returns The numeric result after increment (validated).
-     * @throws If the INCR result is not a finite number.
+     * @returns The sequence number taken by this call.
+     * @throws If Redis reports an error or the INCR result is not a finite number.
      */
     async incr(key: string): Promise<number> {
-        const res = (await this.client.incr(key)) - 1;
-        if (typeof res !== 'number' || !Number.isFinite(res)) {
-            throw new Error(`Unexpected INCR result: ${res}`);
+        const results = await this.client.multi().incr(key).expire(key, COUNTER_TTL_SECONDS).exec();
+        const [err, value] = results?.[0] ?? [new Error('Empty MULTI result'), null];
+        if (err) {
+            throw err;
         }
-        await this.client.expire(key, 3600);
-        return res;
+        const seq = Number(value) - 1;
+        if (!Number.isFinite(seq)) {
+            throw new Error(`Unexpected INCR result: ${String(value)}`);
+        }
+        return seq;
     }
 }

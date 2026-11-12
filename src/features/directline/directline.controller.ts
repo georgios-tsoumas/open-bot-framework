@@ -93,7 +93,7 @@ export class DirectlineController {
      *
      * @param convId Conversation identifier
      * @param securityKey Authorization header value (Bearer token)
-     * @param watermark Optional watermark to set activity increment
+     * @param watermark Client's last watermark; the returned streamUrl replays activities after it
      * @returns ConversationResponse containing token, streamUrl and expires_in
      */
     @Get('conversations/:convId')
@@ -101,7 +101,7 @@ export class DirectlineController {
         @Param('convId') convId: string,
         @Headers('authorization') securityKey: string,
         @Query('watermark') watermark: string
-    ): Promise<ConversationResponse> {
+    ): ConversationResponse {
         return this.directLineService.getConversation(convId, securityKey, watermark);
     }
 
