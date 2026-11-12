@@ -29,6 +29,6 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=client-builder /app/client/dist ./client/dist
 
-EXPOSE 1986
+EXPOSE 1986 1992
 
 CMD ["node", "dist/src/main"]

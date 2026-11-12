@@ -7,10 +7,8 @@ import {
     OnModuleInit,
     UnauthorizedException
 } from '@nestjs/common';
-import { HttpAdapterHost } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { IncomingMessage, Server } from 'http';
-import { Duplex } from 'stream';
+import { IncomingMessage } from 'http';
 import Redis from 'ioredis';
 import { WebSocket, WebSocketServer } from 'ws';
 import { REDIS_SUBSCRIBER } from '../redis/redis.constants';
@@ -41,7 +39,7 @@ interface SocketState {
 }
 
 /**
- * DirectLine stream websockets, served on the main HTTP port.
+ * DirectLine stream websockets, served on their own port (SOCKET_PORT).
  *
  * Any replica can receive a bot reply. Replies are stored in Redis and published on the
  * conversation's channel; this pod subscribes to the channels of the conversations whose sockets it
@@ -50,37 +48,42 @@ interface SocketState {
 @Injectable()
 export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdown {
     private readonly logger = new Logger(this.constructor.name);
-    private readonly wss = new WebSocketServer({ noServer: true });
+    private wss?: WebSocketServer;
     // Conversation id to socket, for sockets held by this pod
     private readonly sockets = new Map<string, SocketState>();
+    private readonly socketPort: number;
     private readonly drainMs: number;
 
     constructor(
         private readonly directLineTokenService: DirectlineTokenService,
         private readonly activityStore: ActivityStoreService,
         @Inject(REDIS_SUBSCRIBER) private readonly subscriber: Redis,
-        private readonly httpAdapterHost: HttpAdapterHost,
         private readonly drainState: DrainStateService,
         configService: ConfigService
     ) {
+        this.socketPort = Number(configService.get<string>('SOCKET_PORT'));
         this.drainMs = Number(configService.get<string>('SHUTDOWN_DRAIN_MS') ?? 5000);
     }
 
     onModuleInit() {
         this.subscriber.on('message', (channel: string, message: string) => this.onChannelMessage(channel, message));
-        const server = this.httpAdapterHost.httpAdapter.getHttpServer() as Server;
-        server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) =>
-            this.handleUpgrade(req, socket, head)
-        );
+        this.wss = new WebSocketServer({
+            port: this.socketPort,
+            verifyClient: ({ req }: { req: IncomingMessage }) => this.acceptsUpgrade(req)
+        });
+        this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => void this.handleConnection(ws, req));
+        this.wss.on('listening', () => {
+            this.logger.log(`WebSocket server listening on ${this.socketPort}`);
+        });
+        this.wss.on('error', (err: Error) => {
+            this.logger.error(`WebSocket error ${err}`);
+        });
     }
 
-    handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+    /** Refuse upgrades to other paths, and new sockets while the pod drains for shutdown. */
+    acceptsUpgrade(req: IncomingMessage): boolean {
         const pathname = new URL(req.url ?? '', 'http://obf').pathname;
-        if (this.drainState.isDraining() || !STREAM_PATH.test(pathname)) {
-            socket.destroy();
-            return;
-        }
-        this.wss.handleUpgrade(req, socket, head, ws => void this.handleConnection(ws, req));
+        return !this.drainState.isDraining() && STREAM_PATH.test(pathname);
     }
 
     async handleConnection(ws: WebSocket, req: IncomingMessage): Promise<void> {
@@ -186,7 +189,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         }
         this.sockets.clear();
         await this.subscriber.unsubscribe().catch((e: unknown) => this.logger.warn(`Unsubscribe failed: ${String(e)}`));
-        this.wss.close();
+        this.wss?.close();
     }
 
     private onClose(conv: string, ws: WebSocket) {

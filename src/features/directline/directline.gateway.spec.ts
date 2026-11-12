@@ -1,8 +1,6 @@
 import { EventEmitter } from 'events';
 import { IncomingMessage } from 'http';
-import { Duplex } from 'stream';
 import { ConfigService } from '@nestjs/config';
-import { HttpAdapterHost } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Activity } from 'botframework-schema';
 import Redis from 'ioredis';
@@ -60,7 +58,6 @@ describe('DirectLineGateway', () => {
             tokenService,
             store as unknown as ActivityStoreService,
             subscriber as unknown as Redis,
-            {} as HttpAdapterHost,
             drainState,
             configService
         );
@@ -180,30 +177,20 @@ describe('DirectLineGateway', () => {
         expect(subscriber.unsubscribe).toHaveBeenCalledWith('obf:conv:conv1');
     });
 
-    describe('handleUpgrade', () => {
-        const upgrade = (url: string) => {
-            const socket = { destroy: jest.fn() };
-            const handleUpgrade = jest.spyOn(gateway['wss'], 'handleUpgrade').mockImplementation(() => undefined);
-            gateway.handleUpgrade({ url } as IncomingMessage, socket as unknown as Duplex, Buffer.alloc(0));
-            return { socket, handleUpgrade };
-        };
+    describe('acceptsUpgrade', () => {
+        const accepts = (url: string) => gateway.acceptsUpgrade({ url } as IncomingMessage);
 
         it('accepts the stream path', () => {
-            const { socket, handleUpgrade } = upgrade(streamPath(token));
-            expect(socket.destroy).not.toHaveBeenCalled();
-            expect(handleUpgrade).toHaveBeenCalled();
+            expect(accepts(streamPath(token))).toBe(true);
         });
 
         it('refuses other paths', () => {
-            const { socket, handleUpgrade } = upgrade('/v3/directline/conversations');
-            expect(socket.destroy).toHaveBeenCalled();
-            expect(handleUpgrade).not.toHaveBeenCalled();
+            expect(accepts('/v3/directline/conversations')).toBe(false);
         });
 
         it('refuses new sockets while draining', () => {
             drainState.start();
-            const { socket } = upgrade(streamPath(token));
-            expect(socket.destroy).toHaveBeenCalled();
+            expect(accepts(streamPath(token))).toBe(false);
         });
     });
 

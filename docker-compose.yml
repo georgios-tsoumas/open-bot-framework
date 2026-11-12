@@ -3,6 +3,7 @@ services:
     build: .
     ports:
       - "1986:1986"
+      - "1992:1992"
     env_file:
       - .env
     environment:
