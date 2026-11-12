@@ -65,17 +65,32 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         this.drainMs = Number(configService.get<string>('SHUTDOWN_DRAIN_MS') ?? 5000);
     }
 
-    onModuleInit() {
+    /**
+     * Fails startup when SOCKET_PORT cannot be bound. A pod without its websocket server would pass
+     * readiness and take traffic while no client could stream; failing lets k8s restart it instead.
+     */
+    async onModuleInit(): Promise<void> {
         this.subscriber.on('message', (channel: string, message: string) => this.onChannelMessage(channel, message));
-        this.wss = new WebSocketServer({
+        const wss = new WebSocketServer({
             port: this.socketPort,
             verifyClient: ({ req }: { req: IncomingMessage }) => this.acceptsUpgrade(req)
         });
-        this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => void this.handleConnection(ws, req));
-        this.wss.on('listening', () => {
-            this.logger.log(`WebSocket server listening on ${this.socketPort}`);
+        this.wss = wss;
+        wss.on('connection', (ws: WebSocket, req: IncomingMessage) => void this.handleConnection(ws, req));
+        await new Promise<void>((resolve, reject) => {
+            const onError = (err: Error) => {
+                wss.off('listening', onListening);
+                reject(new Error(`WebSocket server cannot listen on ${this.socketPort}: ${err.message}`));
+            };
+            const onListening = () => {
+                wss.off('error', onError);
+                resolve();
+            };
+            wss.once('error', onError);
+            wss.once('listening', onListening);
         });
-        this.wss.on('error', (err: Error) => {
+        this.logger.log(`WebSocket server listening on ${this.socketPort}`);
+        wss.on('error', (err: Error) => {
             this.logger.error(`WebSocket error ${err}`);
         });
     }

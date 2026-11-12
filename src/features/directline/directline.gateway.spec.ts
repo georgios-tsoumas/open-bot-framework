@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { IncomingMessage } from 'http';
+import { AddressInfo, createServer, Server } from 'net';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Activity } from 'botframework-schema';
@@ -61,6 +62,46 @@ describe('DirectLineGateway', () => {
             drainState,
             configService
         );
+    });
+
+    describe('onModuleInit', () => {
+        const listen = (server: Server) =>
+            new Promise<number>(resolve =>
+                server.listen(0, '0.0.0.0', () => resolve((server.address() as AddressInfo).port))
+            );
+        const gatewayOnPort = (port: number) =>
+            new DirectLineGateway(
+                tokenService,
+                store as unknown as ActivityStoreService,
+                subscriber as unknown as Redis,
+                drainState,
+                { get: (key: string) => (key === 'SOCKET_PORT' ? String(port) : undefined) } as unknown as ConfigService
+            );
+
+        it('fails startup when SOCKET_PORT is already taken', async () => {
+            const blocker = createServer();
+            const port = await listen(blocker);
+            try {
+                await expect(gatewayOnPort(port).onModuleInit()).rejects.toThrow(
+                    `WebSocket server cannot listen on ${port}`
+                );
+            } finally {
+                blocker.close();
+            }
+        });
+
+        it('starts listening on SOCKET_PORT', async () => {
+            const probe = createServer();
+            const port = await listen(probe);
+            await new Promise(resolve => probe.close(resolve));
+            const started = gatewayOnPort(port);
+            await started.onModuleInit();
+            try {
+                expect((started['wss']?.address() as AddressInfo).port).toBe(port);
+            } finally {
+                started['wss']?.close();
+            }
+        });
     });
 
     it('registers a socket with a valid token and subscribes to its channel', async () => {
