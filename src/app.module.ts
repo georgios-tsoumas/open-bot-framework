@@ -12,7 +12,6 @@ import { AuthorizationModule } from './features/authorization/authorization.modu
 import { CacheModule } from '@nestjs/cache-manager';
 import { JwtModule } from '@nestjs/jwt';
 import { RedisModule } from './features/redis/redis.module';
-import { MigrationRunner } from './database/migration-runner';
 
 @Module({
     imports: [
@@ -50,8 +49,9 @@ import { MigrationRunner } from './database/migration-runner';
                     database: configService.get('TYPEORM_DATABASE'),
                     entities: [__dirname + '/**/*.entity{.ts,.js}'],
                     migrations: [__dirname + '/../migrations/*.js'],
-                    // Schema changes only through migrations, run once under a lock by MigrationRunner
-                    migrationsRun: false,
+                    // Schema changes only through migrations. TypeORM runs pending ones at startup, before
+                    // listen. No lock across replicas, so a migration must be safe to run twice
+                    migrationsRun: true,
                     synchronize: false,
                     autoLoadEntities: true,
                     dropSchema: false
@@ -64,6 +64,6 @@ import { MigrationRunner } from './database/migration-runner';
         WebChatModule
     ],
     controllers: [],
-    providers: [MigrationRunner]
+    providers: []
 })
 export class AppModule {}

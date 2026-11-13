@@ -6,7 +6,6 @@ import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import Redis from 'ioredis';
 import { AllExceptionsFilter } from './filters/exception.filter';
-import { MigrationRunner } from './database/migration-runner';
 import { REDIS_CLIENT } from './features/redis/redis.constants';
 
 async function bootstrap() {
@@ -15,8 +14,6 @@ async function bootstrap() {
     const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy }));
     // SIGTERM runs the gateway drain (readiness 503, then close sockets) before the server stops
     app.enableShutdownHooks();
-    // Before serving anything, so no request sees a half-migrated schema
-    await app.get(MigrationRunner).run();
     await app.register(multipart, {
         limits: {
             fileSize: (Number(process.env.UPLOAD_MAX_FILE_MB) || 10) * 1024 * 1024,
