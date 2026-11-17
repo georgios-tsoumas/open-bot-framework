@@ -27,7 +27,7 @@ import { DirectlineTokenService } from './dirtectline-token.service';
 // RFC 6455 close codes
 const GOING_AWAY = 1001; // pod shutting down; DirectLine clients reconnect
 const POLICY_VIOLATION = 1008; // bad or missing token
-const INTERNAL_ERROR = 1011; // could not replay; the client reconnects and tries again
+const INTERNAL_ERROR = 1011; // could not replay or lost Redis; the client reconnects and replays
 
 const STREAM_PATH = /^\/v3\/directline\/conversations\/([^/]+)\/stream$/;
 
@@ -73,6 +73,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
      */
     async onModuleInit(): Promise<void> {
         this.subscriber.on('message', (channel: string, message: string) => this.onChannelMessage(channel, message));
+        this.subscriber.on('close', () => this.onSubscriberClosed());
         const wss = new WebSocketServer({
             port: this.socketPort,
             verifyClient: ({ req }: { req: IncomingMessage }) => this.acceptsUpgrade(req)
@@ -191,6 +192,20 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             return;
         }
         this.sendLive(state, message);
+    }
+
+    /**
+     * Messages published while the subscriber was disconnected are never delivered, and the socket
+     * would not notice. Close held sockets so clients reconnect with their watermark and replay.
+     */
+    onSubscriberClosed() {
+        if (this.sockets.size === 0) {
+            return;
+        }
+        this.logger.warn(`Redis subscriber disconnected; closing ${this.sockets.size} sockets for replay`);
+        for (const { ws } of this.sockets.values()) {
+            ws.close(INTERNAL_ERROR);
+        }
     }
 
     /**

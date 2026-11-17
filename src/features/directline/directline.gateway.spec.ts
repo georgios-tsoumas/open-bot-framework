@@ -280,4 +280,28 @@ describe('DirectLineGateway', () => {
             ]);
         });
     });
+
+    describe('Redis subscriber disconnect', () => {
+        it('closes held sockets with 1011 so clients reconnect and replay', async () => {
+            const ws = await connect(streamPath(token));
+            gateway.onSubscriberClosed();
+            expect(ws.close).toHaveBeenCalledWith(1011);
+        });
+
+        it('listens for the subscriber closing', async () => {
+            const started = new DirectLineGateway(
+                tokenService,
+                store as unknown as ActivityStoreService,
+                subscriber as unknown as Redis,
+                drainState,
+                { get: (key: string) => (key === 'SOCKET_PORT' ? '0' : undefined) } as unknown as ConfigService
+            );
+            try {
+                await started.onModuleInit();
+                expect(subscriber.on).toHaveBeenCalledWith('close', expect.any(Function));
+            } finally {
+                started['wss']?.close();
+            }
+        });
+    });
 });
