@@ -251,4 +251,33 @@ describe('DirectLineGateway', () => {
             jest.useRealTimers();
         }
     });
+
+    describe('watermark never moves back', () => {
+        it('sends a live message older than the last one sent without a watermark', async () => {
+            const ws = await connect(streamPath(token));
+            // Bot replies (1, 2) are published during the bot's turn, the user echo (0) after it
+            gateway.onChannelMessage('obf:conv:conv1', message(1));
+            gateway.onChannelMessage('obf:conv:conv1', message(2));
+            gateway.onChannelMessage('obf:conv:conv1', message(0));
+            gateway.onChannelMessage('obf:conv:conv1', message(3));
+            expect(ws.frames()).toEqual([
+                { activities: [activity(1)], watermark: '1' },
+                { activities: [activity(2)], watermark: '2' },
+                { activities: [activity(0)] },
+                { activities: [activity(3)], watermark: '3' }
+            ]);
+        });
+
+        it('counts the replay and the client watermark as already sent', async () => {
+            store.after.mockResolvedValueOnce([stored(6), stored(7)]);
+            const ws = await connect(streamPath(token, '5'));
+            gateway.onChannelMessage('obf:conv:conv1', message(5));
+            gateway.onChannelMessage('obf:conv:conv1', message(8));
+            expect(ws.frames()).toEqual([
+                { activities: [activity(6), activity(7)], watermark: '7' },
+                { activities: [activity(5)] },
+                { activities: [activity(8)], watermark: '8' }
+            ]);
+        });
+    });
 });

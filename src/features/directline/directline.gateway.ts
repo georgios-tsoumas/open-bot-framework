@@ -36,6 +36,8 @@ interface SocketState {
     /** True while stored activities are being replayed; live messages wait in `queued`. */
     replaying: boolean;
     queued: ConversationMessage[];
+    /** Highest seq sent to this socket, i.e. the client's watermark. */
+    lastSeq: number;
 }
 
 /**
@@ -128,7 +130,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         // A newer socket for the same conversation replaces this one; only remove the entry we own.
         // The channel subscription belongs to the map entry, so a replacement keeps it.
         const subscribed = this.sockets.has(conv);
-        const state: SocketState = { ws, replaying: true, queued: [] };
+        const state: SocketState = { ws, replaying: true, queued: [], lastSeq: afterSeq };
         this.sockets.set(conv, state);
         this.logger.verbose(`Web-socket connected for conversation ${conv}`);
         ws.on('close', () => this.onClose(conv, ws));
@@ -149,6 +151,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
                     watermark: String(stored[stored.length - 1].seq)
                 });
                 stored.forEach(s => replayed.add(s.seq));
+                state.lastSeq = Math.max(state.lastSeq, stored[stored.length - 1].seq);
             }
         } catch (e: unknown) {
             this.logger.error(`Replay failed for conversation ${conv}: ${String(e)}`);
@@ -157,7 +160,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             state.replaying = false;
             for (const message of state.queued) {
                 if (message.seq === null || !replayed.has(message.seq)) {
-                    this.send(ws, toFrame(message));
+                    this.sendLive(state, message);
                 }
             }
             state.queued = [];
@@ -187,7 +190,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             state.queued.push(message);
             return;
         }
-        this.send(state.ws, toFrame(message));
+        this.sendLive(state, message);
     }
 
     /**
@@ -220,6 +223,22 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             await this.subscriber.unsubscribe(conversationChannel(conv));
         } catch (e: unknown) {
             this.logger.warn(`Unsubscribe failed for conversation ${conv}: ${String(e)}`);
+        }
+    }
+
+    /**
+     * Send a live message without ever moving the client's watermark back. The user's echo is published
+     * after the bot's turn, so it can arrive after replies with higher seqs; it then goes without a
+     * watermark and the client keeps the higher one.
+     */
+    private sendLive(state: SocketState, message: ConversationMessage) {
+        if (message.seq !== null && message.seq <= state.lastSeq) {
+            this.send(state.ws, { activities: [message.activity] });
+            return;
+        }
+        this.send(state.ws, toFrame(message));
+        if (message.seq !== null) {
+            state.lastSeq = message.seq;
         }
     }
 
