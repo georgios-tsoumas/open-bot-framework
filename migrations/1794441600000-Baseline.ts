@@ -20,7 +20,14 @@ export class Baseline1794441600000 implements MigrationInterface {
                 : { name, type: 'character varying', ...extra };
         const uuidPrimary = (name: string): TableColumnOptions =>
             isMysql
-                ? { name, type: 'varchar', length: '36', isPrimary: true, isGenerated: true, generationStrategy: 'uuid' }
+                ? {
+                      name,
+                      type: 'varchar',
+                      length: '36',
+                      isPrimary: true,
+                      isGenerated: true,
+                      generationStrategy: 'uuid'
+                  }
                 : { name, type: 'uuid', isPrimary: true, isGenerated: true, generationStrategy: 'uuid' };
         const uuidReference = (name: string): TableColumnOptions =>
             isMysql
