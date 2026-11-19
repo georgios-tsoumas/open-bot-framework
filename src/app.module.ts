@@ -9,6 +9,7 @@ import { OpenBotsecretModule } from './features/openbotsecret/openbotsecret.modu
 import { WebChatModule } from './features/channels/webchat/webchat.module';
 import { DirectlineModule } from './features/directline/directline.module';
 import { AuthorizationModule } from './features/authorization/authorization.module';
+import { HealthModule } from './features/health/health.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { JwtModule } from '@nestjs/jwt';
 import { RedisModule } from './features/redis/redis.module';
@@ -61,7 +62,8 @@ import { RedisModule } from './features/redis/redis.module';
         AuthorizationModule,
         OpenBotModule,
         OpenBotsecretModule,
-        WebChatModule
+        WebChatModule,
+        HealthModule
     ],
     controllers: [],
     providers: []
