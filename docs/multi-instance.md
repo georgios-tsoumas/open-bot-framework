@@ -39,9 +39,9 @@ Rate-limit counters are shared under `obf:rl:`.
 - Route HTTP on `PORT` (default 1986) and WebSockets on `SOCKET_PORT` (1992 in
   the example configuration). `DIRECTLINE_SOCKET_URL` must route to the socket
   listener, and ingress WebSocket idle timeout must exceed 20 seconds.
-- Use `/health` for liveness and `/health/ready` for readiness. Readiness checks
-  Redis commands, subscriber status and the database, and returns 503 while draining.
-- On shutdown, readiness fails and new sockets are refused before the gateway
+- Use `/health` for liveness. It returns 200 while the process serves HTTP and does
+  not check Redis, the database or draining. There is no readiness endpoint.
+- On shutdown, new sockets are refused before the gateway
   waits `SHUTDOWN_DRAIN_MS` (default 5000), then closes sockets with code 1001.
   The termination grace period must exceed this drain time.
 - Schema synchronization is disabled. TypeORM runs pending migrations before
