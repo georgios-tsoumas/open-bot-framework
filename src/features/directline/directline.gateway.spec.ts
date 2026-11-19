@@ -1,16 +1,28 @@
 import { EventEmitter } from 'events';
 import { IncomingMessage } from 'http';
+import { AddressInfo, createServer, Server } from 'net';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { Activity } from 'botframework-schema';
+import Redis from 'ioredis';
 import { WebSocket } from 'ws';
 import { WebChatService } from '../channels/webchat/webchat.service';
+import { DrainStateService } from '../health/drain-state.service';
+import { ACTIVITY_RETENTION_MS, ActivityStoreService } from './activity-store.service';
+import { StoredActivity } from './conversation-stream.types';
 import { DirectlineTokenService } from './dirtectline-token.service';
 import { DirectLineGateway } from './directline.gateway';
 
 class FakeSocket extends EventEmitter {
+    readyState: number = WebSocket.OPEN;
     send = jest.fn();
     close = jest.fn();
+    frames = () => this.send.mock.calls.map(([raw]) => JSON.parse(raw as string) as Record<string, unknown>);
 }
+
+const activity = (seq: number, type = 'message') => ({ id: `conv1|${seq}`, type }) as Activity;
+const stored = (seq: number): StoredActivity => ({ seq, activity: activity(seq) });
+const message = (seq: number | null, type = 'message') => JSON.stringify({ seq, activity: activity(seq ?? -1, type) });
 
 describe('DirectLineGateway', () => {
     const configService = { get: () => undefined } as unknown as ConfigService;
@@ -20,47 +32,380 @@ describe('DirectLineGateway', () => {
         new JwtService({ secret: 'test-secret' })
     );
     const token = tokenService.createToken({ bot: 'bot', site: 'site1', conv: 'conv1' }, 60);
-    const streamPath = (t?: string) =>
-        `/v3/directline/conversations/conv1/stream?watermark=-${t === undefined ? '' : `&t=${t}`}`;
+    const streamPath = (t?: string, watermark = '-') =>
+        `/v3/directline/conversations/conv1/stream?watermark=${watermark}${t === undefined ? '' : `&t=${t}`}`;
 
     let gateway: DirectLineGateway;
-    const connect = (url: string) => {
+    let subscriber: { subscribe: jest.Mock; unsubscribe: jest.Mock; on: jest.Mock };
+    let store: { after: jest.Mock };
+    let drainState: DrainStateService;
+
+    const connect = async (url: string) => {
         const ws = new FakeSocket();
-        gateway.handleConnection(ws as unknown as WebSocket, { url } as IncomingMessage);
+        await gateway.handleConnection(ws as unknown as WebSocket, { url } as IncomingMessage);
         return ws;
     };
-    const registered = () => gateway['socketMeta'];
+    const registered = () => gateway['sockets'];
 
     beforeEach(() => {
-        gateway = new DirectLineGateway(tokenService, configService);
+        subscriber = {
+            subscribe: jest.fn().mockResolvedValue(1),
+            unsubscribe: jest.fn().mockResolvedValue(0),
+            on: jest.fn()
+        };
+        store = { after: jest.fn().mockResolvedValue([]) };
+        drainState = new DrainStateService();
+        gateway = new DirectLineGateway(
+            tokenService,
+            store as unknown as ActivityStoreService,
+            subscriber as unknown as Redis,
+            drainState,
+            configService
+        );
     });
 
-    it('registers a socket with a valid token', () => {
-        const ws = connect(streamPath(token));
+    describe('onModuleInit', () => {
+        const listen = (server: Server) =>
+            new Promise<number>(resolve =>
+                server.listen(0, '0.0.0.0', () => resolve((server.address() as AddressInfo).port))
+            );
+        const gatewayOnPort = (port: number) =>
+            new DirectLineGateway(
+                tokenService,
+                store as unknown as ActivityStoreService,
+                subscriber as unknown as Redis,
+                drainState,
+                { get: (key: string) => (key === 'SOCKET_PORT' ? String(port) : undefined) } as unknown as ConfigService
+            );
+
+        it('fails startup when SOCKET_PORT is already taken', async () => {
+            const blocker = createServer();
+            const port = await listen(blocker);
+            try {
+                await expect(gatewayOnPort(port).onModuleInit()).rejects.toThrow(
+                    `WebSocket server cannot listen on ${port}`
+                );
+            } finally {
+                blocker.close();
+            }
+        });
+
+        it('starts listening on SOCKET_PORT', async () => {
+            const probe = createServer();
+            const port = await listen(probe);
+            await new Promise(resolve => probe.close(resolve));
+            const started = gatewayOnPort(port);
+            await started.onModuleInit();
+            try {
+                expect((started['wss']?.address() as AddressInfo).port).toBe(port);
+            } finally {
+                started['wss']?.close();
+            }
+        });
+    });
+
+    it('registers a socket with a valid token and subscribes to its channel', async () => {
+        const ws = await connect(streamPath(token));
         expect(ws.close).not.toHaveBeenCalled();
-        expect(registered().get('conv1')).toBe(ws);
+        expect(registered().get('conv1')?.ws).toBe(ws);
+        expect(subscriber.subscribe).toHaveBeenCalledWith('obf:conv:conv1');
     });
 
     it.each([
         ['no token', streamPath()],
         ['a bad token', streamPath('not-a-jwt')],
         ['a token for another conversation', streamPath(token).replace('conv1', 'conv2')]
-    ])('closes a socket with %s', (_label, url) => {
-        const ws = connect(url);
+    ])('closes a socket with %s', async (_label, url) => {
+        const ws = await connect(url);
         expect(ws.close).toHaveBeenCalledWith(1008);
         expect(registered().size).toBe(0);
+        expect(subscriber.subscribe).not.toHaveBeenCalled();
     });
 
-    it('forgets a socket once it closes', () => {
-        const ws = connect(streamPath(token));
+    it('replays activities after the client watermark in one frame', async () => {
+        store.after.mockResolvedValueOnce([stored(6), stored(7)]);
+        const ws = await connect(streamPath(token, '5'));
+        expect(store.after).toHaveBeenCalledWith('conv1', 5);
+        expect(ws.frames()).toEqual([{ activities: [activity(6), activity(7)], watermark: '7' }]);
+    });
+
+    it.each(['-', ''])('replays everything stored when the watermark is %p', async watermark => {
+        await connect(streamPath(token, watermark));
+        expect(store.after).toHaveBeenCalledWith('conv1', -1);
+    });
+
+    it('sends nothing on connect when nothing is stored', async () => {
+        const ws = await connect(streamPath(token));
+        expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('holds live messages during replay and skips the ones already replayed', async () => {
+        let finishReplay: (value: StoredActivity[]) => void = () => undefined;
+        store.after.mockReturnValueOnce(new Promise<StoredActivity[]>(resolve => (finishReplay = resolve)));
+        const ws = new FakeSocket();
+        const connecting = gateway.handleConnection(
+            ws as unknown as WebSocket,
+            { url: streamPath(token) } as IncomingMessage
+        );
+        await Promise.resolve(); // let subscribe finish so the socket is registered and replaying
+
+        gateway.onChannelMessage('obf:conv:conv1', message(3));
+        gateway.onChannelMessage('obf:conv:conv1', message(4));
+        expect(ws.send).not.toHaveBeenCalled();
+
+        finishReplay([stored(2), stored(3)]);
+        await connecting;
+        expect(ws.frames()).toEqual([
+            { activities: [activity(2), activity(3)], watermark: '3' },
+            { activities: [activity(4)], watermark: '4' }
+        ]);
+    });
+
+    it('sends live messages with a watermark, typing without one', async () => {
+        const ws = await connect(streamPath(token));
+        gateway.onChannelMessage('obf:conv:conv1', message(9));
+        gateway.onChannelMessage('obf:conv:conv1', message(null, 'typing'));
+        expect(ws.frames()).toEqual([
+            { activities: [activity(9)], watermark: '9' },
+            { activities: [activity(-1, 'typing')] }
+        ]);
+    });
+
+    it('ignores messages for conversations it does not hold, and malformed ones', async () => {
+        const ws = await connect(streamPath(token));
+        gateway.onChannelMessage('obf:conv:other', message(1));
+        gateway.onChannelMessage('obf:conv:conv1', 'not json');
+        expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('does not send to a socket that is no longer open', async () => {
+        const ws = await connect(streamPath(token));
+        ws.readyState = WebSocket.CLOSING;
+        gateway.onChannelMessage('obf:conv:conv1', message(1));
+        expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('closes with 1011 when the replay fails', async () => {
+        store.after.mockRejectedValueOnce(new Error('redis down'));
+        const ws = await connect(streamPath(token));
+        expect(ws.close).toHaveBeenCalledWith(1011);
+    });
+
+    it('forgets the socket and unsubscribes once it closes', async () => {
+        const ws = await connect(streamPath(token));
         ws.emit('close');
         expect(registered().has('conv1')).toBe(false);
+        expect(subscriber.unsubscribe).toHaveBeenCalledWith('obf:conv:conv1');
     });
 
-    it('keeps the newer socket when an older one for the same conversation closes', () => {
-        const older = connect(streamPath(token));
-        const newer = connect(streamPath(token));
+    it('keeps the newer socket and the subscription when an older one closes', async () => {
+        const older = await connect(streamPath(token));
+        const newer = await connect(streamPath(token));
         older.emit('close');
-        expect(registered().get('conv1')).toBe(newer);
+        expect(registered().get('conv1')?.ws).toBe(newer);
+        expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
+        expect(subscriber.unsubscribe).not.toHaveBeenCalled();
+    });
+
+    it('drops the subscription when the socket closed while subscribing', async () => {
+        const ws = new FakeSocket();
+        subscriber.subscribe.mockImplementationOnce(() => {
+            ws.emit('close');
+            return Promise.resolve(1);
+        });
+        await gateway.handleConnection(ws as unknown as WebSocket, { url: streamPath(token) } as IncomingMessage);
+        expect(registered().has('conv1')).toBe(false);
+        expect(subscriber.unsubscribe).toHaveBeenCalledWith('obf:conv:conv1');
+    });
+
+    describe('acceptsUpgrade', () => {
+        const accepts = (url: string) => gateway.acceptsUpgrade({ url } as IncomingMessage);
+
+        it('accepts the stream path', () => {
+            expect(accepts(streamPath(token))).toBe(true);
+        });
+
+        it('refuses other paths', () => {
+            expect(accepts('/v3/directline/conversations')).toBe(false);
+        });
+
+        it('refuses new sockets while draining', () => {
+            drainState.start();
+            expect(accepts(streamPath(token))).toBe(false);
+        });
+    });
+
+    it('on shutdown drains, then closes sockets with 1001 and unsubscribes', async () => {
+        jest.useFakeTimers();
+        try {
+            const ws = await connect(streamPath(token));
+            const shutdown = gateway.beforeApplicationShutdown();
+            expect(drainState.isDraining()).toBe(true);
+            expect(ws.close).not.toHaveBeenCalled();
+            await jest.advanceTimersByTimeAsync(5000);
+            await shutdown;
+            expect(ws.close).toHaveBeenCalledWith(1001);
+            expect(subscriber.unsubscribe).toHaveBeenCalledWith();
+            expect(registered().size).toBe(0);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    describe('watermark never moves back', () => {
+        it('sends a live message older than the last one sent without a watermark', async () => {
+            const ws = await connect(streamPath(token));
+            // Bot replies (1, 2) are published during the bot's turn, the user echo (0) after it
+            gateway.onChannelMessage('obf:conv:conv1', message(1));
+            gateway.onChannelMessage('obf:conv:conv1', message(2));
+            gateway.onChannelMessage('obf:conv:conv1', message(0));
+            gateway.onChannelMessage('obf:conv:conv1', message(3));
+            expect(ws.frames()).toEqual([
+                { activities: [activity(1)], watermark: '1' },
+                { activities: [activity(2)], watermark: '2' },
+                { activities: [activity(0)] },
+                { activities: [activity(3)], watermark: '3' }
+            ]);
+        });
+
+        it('counts the replay and the client watermark as already sent', async () => {
+            store.after.mockResolvedValueOnce([stored(6), stored(7)]);
+            const ws = await connect(streamPath(token, '5'));
+            gateway.onChannelMessage('obf:conv:conv1', message(5));
+            gateway.onChannelMessage('obf:conv:conv1', message(8));
+            expect(ws.frames()).toEqual([
+                { activities: [activity(6), activity(7)], watermark: '7' },
+                { activities: [activity(5)] },
+                { activities: [activity(8)], watermark: '8' }
+            ]);
+        });
+    });
+
+    describe('delivery cursors', () => {
+        it('replays and deduplicates by publication cursor rather than activity sequence', async () => {
+            store.after.mockResolvedValueOnce([
+                { ...stored(9), cursor: 'v2:100-0' },
+                { ...stored(1), cursor: 'v2:100-1' }
+            ]);
+            const ws = await connect(streamPath(token, 'v2:99-0'));
+            expect(store.after).toHaveBeenCalledWith('conv1', 'v2:99-0');
+            gateway.onChannelMessage(
+                'obf:conv:conv1',
+                JSON.stringify({ seq: 1, cursor: 'v2:100-1', activity: activity(1) })
+            );
+            gateway.onChannelMessage(
+                'obf:conv:conv1',
+                JSON.stringify({ seq: 0, cursor: 'v2:100-2', activity: activity(0) })
+            );
+            expect(ws.frames()).toEqual([
+                { activities: [activity(9), activity(1)], watermark: 'v2:100-1' },
+                { activities: [activity(0)], watermark: 'v2:100-2' }
+            ]);
+        });
+    });
+
+    describe('publication arriving after replay', () => {
+        it('expires replay deduplication so a reused sequence is not suppressed indefinitely', async () => {
+            const startedAt = Date.now();
+            const now = jest.spyOn(Date, 'now').mockReturnValue(startedAt);
+            try {
+                store.after.mockResolvedValueOnce([stored(7)]);
+                const ws = await connect(streamPath(token, '5'));
+                now.mockReturnValue(startedAt + ACTIVITY_RETENTION_MS);
+                gateway.onChannelMessage('obf:conv:conv1', message(7));
+                expect(ws.frames()).toHaveLength(2);
+            } finally {
+                now.mockRestore();
+            }
+        });
+
+        it('does not resend an activity already delivered by the replay', async () => {
+            store.after.mockResolvedValueOnce([stored(6), stored(7)]);
+            const ws = await connect(streamPath(token, '5'));
+            gateway.onChannelMessage('obf:conv:conv1', message(6));
+            gateway.onChannelMessage('obf:conv:conv1', message(7));
+            expect(ws.frames()).toEqual([{ activities: [activity(6), activity(7)], watermark: '7' }]);
+        });
+
+        it('still delivers an unseen late echo whose sequence is below the replay watermark', async () => {
+            store.after.mockResolvedValueOnce([stored(7)]);
+            const ws = await connect(streamPath(token, '5'));
+            gateway.onChannelMessage('obf:conv:conv1', message(6));
+            expect(ws.frames()).toEqual([{ activities: [activity(7)], watermark: '7' }, { activities: [activity(6)] }]);
+        });
+    });
+
+    describe('overlapping reconnect subscriptions', () => {
+        it('closes both sockets if their shared subscription fails', async () => {
+            let rejectSubscription: (reason: Error) => void = () => undefined;
+            subscriber.subscribe.mockReturnValueOnce(new Promise((_resolve, reject) => (rejectSubscription = reject)));
+            const older = new FakeSocket();
+            const newer = new FakeSocket();
+            const first = gateway.handleConnection(
+                older as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            const second = gateway.handleConnection(
+                newer as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            rejectSubscription(new Error('subscriber unavailable'));
+            await Promise.all([first, second]);
+            expect(older.close).toHaveBeenCalledWith(1011);
+            expect(newer.close).toHaveBeenCalledWith(1011);
+            expect(store.after).not.toHaveBeenCalled();
+        });
+
+        it('waits for the original subscription before replaying on a replacement socket', async () => {
+            let subscribed: (value: number) => void = () => undefined;
+            subscriber.subscribe.mockReturnValueOnce(new Promise<number>(resolve => (subscribed = resolve)));
+            const older = new FakeSocket();
+            const newer = new FakeSocket();
+            const first = gateway.handleConnection(
+                older as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            const second = gateway.handleConnection(
+                newer as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            await Promise.resolve();
+            expect(store.after).not.toHaveBeenCalled();
+            subscribed(1);
+            await Promise.all([first, second]);
+            expect(store.after).toHaveBeenCalledTimes(2);
+            expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        it('subscribes again when replacing a closing socket', async () => {
+            const older = await connect(streamPath(token));
+            older.readyState = WebSocket.CLOSING;
+            await connect(streamPath(token));
+            expect(subscriber.subscribe).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe('Redis subscriber disconnect', () => {
+        it('closes held sockets with 1011 so clients reconnect and replay', async () => {
+            const ws = await connect(streamPath(token));
+            gateway.onSubscriberClosed();
+            expect(ws.close).toHaveBeenCalledWith(1011);
+        });
+
+        it('listens for the subscriber closing', async () => {
+            const started = new DirectLineGateway(
+                tokenService,
+                store as unknown as ActivityStoreService,
+                subscriber as unknown as Redis,
+                drainState,
+                { get: (key: string) => (key === 'SOCKET_PORT' ? '0' : undefined) } as unknown as ConfigService
+            );
+            try {
+                await started.onModuleInit();
+                expect(subscriber.on).toHaveBeenCalledWith('close', expect.any(Function));
+            } finally {
+                started['wss']?.close();
+            }
+        });
     });
 });

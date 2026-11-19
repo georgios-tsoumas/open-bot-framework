@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { Activity, ConversationReference, Transcript } from 'botframework-schema';
+import { Activity, ConversationReference } from 'botframework-schema';
 import { DirectLineTokenPayload } from 'src/dto/directline.dto';
 import { AuthorizationUtils } from '../authorization/authorization.utils';
 import { ConfigService } from '@nestjs/config';
@@ -8,7 +8,8 @@ import { ConversationResponse } from 'src/dto/conversation.dto';
 import { OpenBotService } from '../openbot/openbot.service';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
-import { DirectLineGateway } from './directline.gateway';
+import { ConversationPublisher } from './conversation-publisher.service';
+import { isWatermark } from './conversation-stream.types';
 import { DirectlineTokenService } from './dirtectline-token.service';
 import { StorageService } from '../storage/storage.service';
 import { UploadDto } from 'src/dto/upload.dto';
@@ -26,7 +27,7 @@ export class DirectlineConversationService {
         private readonly authorizationService: AuthorizationService,
         private readonly openBotService: OpenBotService,
         private readonly httpService: HttpService,
-        private readonly socketGateway: DirectLineGateway,
+        private readonly publisher: ConversationPublisher,
         private readonly directLineTokenService: DirectlineTokenService,
         private readonly storageService: StorageService,
         private readonly atomicOperationService: AtomicOperationsService
@@ -94,19 +95,17 @@ export class DirectlineConversationService {
     }
 
     /**
-     * Return conversation metadata and set the watermark used for subsequent activity numbering.
+     * Return conversation metadata with a fresh stream URL. DirectLine clients call this to reconnect;
+     * the stream URL carries their watermark so the gateway replays what they missed. It never
+     * changes the activity counter: rewinding it would hand out ids that were already used.
      *
      * @param conversationId Conversation identifier
      * @param authorizationHeader Authorization header containing directline token
-     * @param watermark Optional watermark string that will be stored as numeric watermark
+     * @param watermark Client's last watermark, passed through to the stream URL
      * @returns ConversationResponse with token and stream URL
      * @throws BadRequestException if header missing/invalid
      */
-    async getConversation(
-        conversationId: string,
-        authorizationHeader: string,
-        watermark: string
-    ): Promise<ConversationResponse> {
+    getConversation(conversationId: string, authorizationHeader: string, watermark: string): ConversationResponse {
         const securityKey = AuthorizationUtils.removeBearer(authorizationHeader);
         if (!securityKey) {
             throw new BadRequestException('Wrong type of token provided. Provide Bearer');
@@ -115,15 +114,15 @@ export class DirectlineConversationService {
         if (conversationId !== validPayload.conv) {
             throw new UnauthorizedException('Token does not belong to this conversation');
         }
-        // Clients send no watermark or '-' on a fresh connect. Storing NaN would break the counter.
-        if (/^\d+$/.test(watermark ?? '')) {
-            await this.atomicOperationService.set(conversationId, Number(watermark));
-        }
         return {
             conversationId,
             expires_in: this.expires,
             token: securityKey,
-            streamUrl: this.generateStreamUrl(conversationId, securityKey, watermark)
+            streamUrl: this.generateStreamUrl(
+                conversationId,
+                securityKey,
+                isWatermark(watermark) ? watermark : undefined
+            )
         };
     }
 
@@ -149,7 +148,7 @@ export class DirectlineConversationService {
 
         // Set bot recipient
         activity.recipient = { id: `${validPayload.bot}@${validPayload.site}`, name: validPayload.bot };
-        const newActivity = await this.createActivity(conversationId, activity, files);
+        const { activity: newActivity, seq } = await this.createActivity(conversationId, activity, files);
 
         // Get bot for event endpoint
         const targetBot = await this.openBotService.findByHandleCached(validPayload.bot);
@@ -162,16 +161,14 @@ export class DirectlineConversationService {
                     timeout: 5000
                 })
             );
-            // Prepare the transcript and push to the live wire (does not require watermark)
-            this.logger.verbose(`User sends type: ${newActivity.type}, text: ${newActivity.text}`);
-            const transcript: Transcript = {
-                activities: [newActivity]
-            };
-            await this.socketGateway.sendToConversation(conversationId, transcript);
-            return { id: newActivity.id };
         } catch (err) {
             throw new BadRequestException(`Failed to post to bot endpoint: ${err}`);
         }
+        // Echo to the client only once the bot accepted it. Stored and numbered like bot replies, so
+        // a reconnecting client gets its own messages back too.
+        this.logger.verbose(`User sends type: ${newActivity.type}, text: ${newActivity.text}`);
+        await this.publisher.publish(conversationId, newActivity, seq);
+        return { id: newActivity.id };
     }
 
     /**
@@ -205,18 +202,10 @@ export class DirectlineConversationService {
         }
 
         // Create the activity
-        const newActivity = await this.createActivity(conversationId, activity);
+        const { activity: newActivity, seq } = await this.createActivity(conversationId, activity);
 
-        // Prepare the transcript and push to the live wire (requires watermark)
-        const transcript: Transcript & { watermark: string | undefined } = {
-            activities: [newActivity],
-            watermark:
-                newActivity.type !== 'typing'
-                    ? String(await this.atomicOperationService.get(conversationId))
-                    : undefined
-        };
         this.logger.verbose(`Bot replies with type: ${newActivity.type}, text: ${newActivity.text}`);
-        await this.socketGateway.sendToConversation(conversationId, transcript);
+        await this.publisher.publish(conversationId, newActivity, seq);
         return { id: newActivity.id };
     }
 
@@ -227,18 +216,23 @@ export class DirectlineConversationService {
      * @param conversationId Conversation id for id generation and object pathing
      * @param activity Activity object to enrich (mutated in place and returned)
      * @param files Optional array of UploadDto to persist and attach
-     * @returns Enriched Activity ready to be forwarded to bot or clients
+     * @returns Enriched Activity and its ID sequence number (null for typing)
      */
-    private async createActivity(conversationId: string, activity: Activity, files?: UploadDto[]) {
+    private async createActivity(
+        conversationId: string,
+        activity: Activity,
+        files?: UploadDto[]
+    ): Promise<{ activity: Activity; seq: number | null }> {
         if (files) {
             await this.storageService.uploadToActivity(files, conversationId, activity);
         }
 
-        // Logic is flawed. Microsoft increases activity id based on some other criterion
+        // Activity identity is independent of publication order. Redis assigns the delivery cursor
+        // when the publisher atomically stores and emits the activity.
+        let seq: number | null = null;
         if (activity.type !== 'typing') {
-            const counter = String(await this.atomicOperationService.incr(conversationId));
-            const padded = counter.padStart(7, '0');
-            activity.id = `${conversationId}|${padded}`;
+            seq = await this.atomicOperationService.incr(conversationId);
+            activity.id = `${conversationId}|${String(seq).padStart(7, '0')}`;
         } else {
             activity.id = `${conversationId}|${AuthorizationUtils.generateRandom(11)}`;
         }
@@ -252,7 +246,7 @@ export class DirectlineConversationService {
         // Append Conversation
         activity.conversation = { id: conversationId, isGroup: false, conversationType: '', name: '' };
 
-        return activity;
+        return { activity, seq };
     }
 
     /**

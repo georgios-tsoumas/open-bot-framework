@@ -9,8 +9,10 @@ import { OpenBotsecretModule } from './features/openbotsecret/openbotsecret.modu
 import { WebChatModule } from './features/channels/webchat/webchat.module';
 import { DirectlineModule } from './features/directline/directline.module';
 import { AuthorizationModule } from './features/authorization/authorization.module';
+import { HealthModule } from './features/health/health.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { JwtModule } from '@nestjs/jwt';
+import { RedisModule } from './features/redis/redis.module';
 
 @Module({
     imports: [
@@ -26,6 +28,7 @@ import { JwtModule } from '@nestjs/jwt';
             envFilePath: ['.env.local', '.env'],
             isGlobal: true
         }),
+        RedisModule,
         DirectlineModule,
         JwtModule.registerAsync({
             imports: [ConfigModule],
@@ -47,8 +50,10 @@ import { JwtModule } from '@nestjs/jwt';
                     database: configService.get('TYPEORM_DATABASE'),
                     entities: [__dirname + '/**/*.entity{.ts,.js}'],
                     migrations: [__dirname + '/../migrations/*.js'],
-                    migrationsRun: configService.get('TYPEORM_AUTORUN_MIGRATIONS') === 'true',
-                    synchronize: true,
+                    // Schema changes only through migrations. TypeORM runs pending ones at startup, before
+                    // listen. No lock across replicas, so a migration must be safe to run twice
+                    migrationsRun: true,
+                    synchronize: false,
                     autoLoadEntities: true,
                     dropSchema: false
                 }) as DataSourceOptions,
@@ -57,7 +62,8 @@ import { JwtModule } from '@nestjs/jwt';
         AuthorizationModule,
         OpenBotModule,
         OpenBotsecretModule,
-        WebChatModule
+        WebChatModule,
+        HealthModule
     ],
     controllers: [],
     providers: []

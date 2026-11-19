@@ -12,16 +12,21 @@ import { StorageModule } from '../storage/storage.module';
 import { StorageService } from '../storage/storage.service';
 import { AtomicOperationsModule } from '../atomicity/atomic-operations.module';
 import { AtomicOperationsService } from '../atomicity/atomic-operations.service';
+import { HealthModule } from '../health/health.module';
+import { ActivityStoreService } from './activity-store.service';
+import { ConversationPublisher } from './conversation-publisher.service';
 
 @Module({
-    imports: [WebChatModule, AuthorizationModule, HttpModule, StorageModule, AtomicOperationsModule],
+    imports: [WebChatModule, AuthorizationModule, HttpModule, StorageModule, AtomicOperationsModule, HealthModule],
     providers: [
         DirectlineConversationService,
         WebChatService,
         DirectLineGateway,
         DirectlineTokenService,
         StorageService,
-        AtomicOperationsService
+        AtomicOperationsService,
+        ActivityStoreService,
+        ConversationPublisher
     ],
     controllers: [DirectlineController, DirectlineAltController]
 })

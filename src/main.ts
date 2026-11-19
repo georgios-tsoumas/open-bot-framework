@@ -4,21 +4,28 @@ import { NestFastifyApplication, FastifyAdapter } from '@nestjs/platform-fastify
 import { ClassSerializerInterceptor, HttpException, HttpStatus } from '@nestjs/common';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
+import Redis from 'ioredis';
 import { AllExceptionsFilter } from './filters/exception.filter';
+import { REDIS_CLIENT } from './features/redis/redis.constants';
 
 async function bootstrap() {
     // Proxies in front of OBF. Client IP comes from X-Forwarded-For, or the connection IP when it is missing
     const trustProxy = Number(process.env.TRUST_PROXY_HOPS ?? 1);
     const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy }));
+    // SIGTERM runs the gateway drain (readiness 503, then close sockets) before the server stops
+    app.enableShutdownHooks();
     await app.register(multipart, {
         limits: {
             fileSize: (Number(process.env.UPLOAD_MAX_FILE_MB) || 10) * 1024 * 1024,
             files: Number(process.env.UPLOAD_MAX_FILES) || 5
         }
     });
-    // Only routes with @RouteConfig({ rateLimit }) are limited
+    // Only routes with @RouteConfig({ rateLimit }) are limited. Counters live in Redis so the limit
+    // holds across replicas instead of multiplying by the pod count
     await app.register(rateLimit, {
         global: false,
+        redis: app.get<Redis>(REDIS_CLIENT),
+        nameSpace: 'obf:rl:',
         errorResponseBuilder: () => new HttpException('Too many requests', HttpStatus.TOO_MANY_REQUESTS)
     });
     app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));

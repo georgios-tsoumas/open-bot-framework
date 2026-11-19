@@ -1,51 +1,119 @@
 import {
     BadRequestException,
+    BeforeApplicationShutdown,
+    Inject,
     Injectable,
     Logger,
-    OnModuleDestroy,
     OnModuleInit,
     UnauthorizedException
 } from '@nestjs/common';
-import { Server as WSServer, WebSocket } from 'ws';
-import { IncomingMessage } from 'http';
-import { Transcript } from 'botframework-schema';
 import { ConfigService } from '@nestjs/config';
+import { IncomingMessage } from 'http';
+import Redis from 'ioredis';
+import { WebSocket, WebSocketServer } from 'ws';
+import { REDIS_SUBSCRIBER } from '../redis/redis.constants';
+import { DrainStateService } from '../health/drain-state.service';
+import { ACTIVITY_RETENTION_MS, ActivityStoreService } from './activity-store.service';
+import {
+    ActivitySetFrame,
+    CHANNEL_PREFIX,
+    ConversationMessage,
+    compareDeliveryCursors,
+    conversationChannel,
+    isDeliveryCursor,
+    isWatermark,
+    toFrame
+} from './conversation-stream.types';
 import { DirectlineTokenService } from './dirtectline-token.service';
 
-// RFC 6455 close code: the connection was refused for a policy reason (bad or missing token)
-const POLICY_VIOLATION = 1008;
+// RFC 6455 close codes
+const GOING_AWAY = 1001; // pod shutting down; DirectLine clients reconnect
+const POLICY_VIOLATION = 1008; // bad or missing token
+const INTERNAL_ERROR = 1011; // could not replay or lost Redis; the client reconnects and replays
 
+const STREAM_PATH = /^\/v3\/directline\/conversations\/([^/]+)\/stream$/;
+
+interface SocketState {
+    ws: WebSocket;
+    subscription: Promise<unknown>;
+    /** Retained for the replay window because publication can arrive after replay has finished. */
+    replayed: Set<number>;
+    replayExpiresAt: number;
+    /** True while stored activities are being replayed; live messages wait in `queued`. */
+    replaying: boolean;
+    queued: ConversationMessage[];
+    /** Highest legacy activity sequence sent before switching to delivery cursors. */
+    lastSeq: number;
+    lastCursor?: string;
+}
+
+/**
+ * DirectLine stream websockets, served on their own port (SOCKET_PORT).
+ *
+ * Any replica can receive a bot reply. Replies are stored in Redis and published on the
+ * conversation's channel; this pod subscribes to the channels of the conversations whose sockets it
+ * holds. On connect it replays stored activities after the client's watermark.
+ */
 @Injectable()
-export class DirectLineGateway implements OnModuleInit, OnModuleDestroy {
+export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdown {
     private readonly logger = new Logger(this.constructor.name);
-    private wss: WSServer;
-    // Conversation id to socket
-    private readonly socketMeta = new Map<string, WebSocket>();
+    private wss?: WebSocketServer;
+    // Conversation id to socket, for sockets held by this pod
+    private readonly sockets = new Map<string, SocketState>();
     private readonly socketPort: number;
+    private readonly drainMs: number;
 
     constructor(
         private readonly directLineTokenService: DirectlineTokenService,
+        private readonly activityStore: ActivityStoreService,
+        @Inject(REDIS_SUBSCRIBER) private readonly subscriber: Redis,
+        private readonly drainState: DrainStateService,
         configService: ConfigService
     ) {
-        this.socketPort = Number(configService.get<number>('SOCKET_PORT'));
+        this.socketPort = Number(configService.get<string>('SOCKET_PORT'));
+        this.drainMs = Number(configService.get<string>('SHUTDOWN_DRAIN_MS') ?? 5000);
     }
 
-    onModuleInit() {
-        this.wss = new WSServer({ port: this.socketPort });
-
-        this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => this.handleConnection(ws, req));
-
-        this.wss.on('listening', () => {
-            this.logger.log('WebSocket server started');
+    /**
+     * Fails startup when SOCKET_PORT cannot be bound. A pod without its websocket server would pass
+     * readiness and take traffic while no client could stream; failing lets k8s restart it instead.
+     */
+    async onModuleInit(): Promise<void> {
+        this.subscriber.on('message', (channel: string, message: string) => this.onChannelMessage(channel, message));
+        this.subscriber.on('close', () => this.onSubscriberClosed());
+        const wss = new WebSocketServer({
+            port: this.socketPort,
+            verifyClient: ({ req }: { req: IncomingMessage }) => this.acceptsUpgrade(req)
         });
-
-        this.wss.on('error', (err: Error) => {
+        this.wss = wss;
+        wss.on('connection', (ws: WebSocket, req: IncomingMessage) => void this.handleConnection(ws, req));
+        await new Promise<void>((resolve, reject) => {
+            const onError = (err: Error) => {
+                wss.off('listening', onListening);
+                reject(new Error(`WebSocket server cannot listen on ${this.socketPort}: ${err.message}`));
+            };
+            const onListening = () => {
+                wss.off('error', onError);
+                resolve();
+            };
+            wss.once('error', onError);
+            wss.once('listening', onListening);
+        });
+        this.logger.log(`WebSocket server listening on ${this.socketPort}`);
+        wss.on('error', (err: Error) => {
             this.logger.error(`WebSocket error ${err}`);
         });
     }
 
-    handleConnection(ws: WebSocket, req: IncomingMessage) {
+    /** Refuse upgrades to other paths, and new sockets while the pod drains for shutdown. */
+    acceptsUpgrade(req: IncomingMessage): boolean {
+        const pathname = new URL(req.url ?? '', 'http://obf').pathname;
+        return !this.drainState.isDraining() && STREAM_PATH.test(pathname);
+    }
+
+    async handleConnection(ws: WebSocket, req: IncomingMessage): Promise<void> {
         let conv: string;
+        let afterSeq: number | string;
         try {
             const parsedUrl = new URL(`wss://server${req?.url ?? ''}`);
             const token = parsedUrl.searchParams.get('t');
@@ -53,51 +121,176 @@ export class DirectLineGateway implements OnModuleInit, OnModuleDestroy {
                 throw new UnauthorizedException('Missing token');
             }
             const directLineTokenPayload = this.directLineTokenService.verifyDirectLineToken(token);
-            const match = parsedUrl.pathname.match(/^\/v3\/directline\/conversations\/([^/]+)\/stream$/);
+            const match = parsedUrl.pathname.match(STREAM_PATH);
             if (!match || match[1] !== directLineTokenPayload.conv) {
                 throw new BadRequestException('Erroneous link');
             }
             conv = directLineTokenPayload.conv;
+            // No watermark: replay everything stored
+            const watermark = parsedUrl.searchParams.get('watermark');
+            afterSeq = isDeliveryCursor(watermark) ? watermark : isWatermark(watermark) ? Number(watermark) : -1;
         } catch (e: unknown) {
             ws.send(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
             ws.close(POLICY_VIOLATION);
             return;
         }
 
-        // A newer socket for the same conversation replaces this one; only remove the entry we own
-        this.socketMeta.set(conv, ws);
+        // A newer socket for the same conversation replaces this one; only remove the entry we own.
+        // The channel subscription belongs to the map entry, so a replacement keeps it.
+        const previous = this.sockets.get(conv);
+        const state: SocketState = {
+            ws,
+            subscription: Promise.resolve(),
+            replayed: new Set(),
+            replayExpiresAt: 0,
+            replaying: true,
+            queued: [],
+            lastSeq: typeof afterSeq === 'number' ? afterSeq : -1,
+            lastCursor: typeof afterSeq === 'string' ? afterSeq : undefined
+        };
+        this.sockets.set(conv, state);
         this.logger.verbose(`Web-socket connected for conversation ${conv}`);
-        ws.on('close', () => {
-            if (this.socketMeta.get(conv) === ws) {
-                this.socketMeta.delete(conv);
-            }
-        });
+        ws.on('close', () => this.onClose(conv, ws));
         ws.on('error', (err: Error) => {
             this.logger.error(`WebSocket error ${err}`);
         });
-    }
 
-    onModuleDestroy() {
-        if (this.wss) {
-            this.wss.close();
+        // Seqs sent in the replay, so a queued live copy of the same activity is not sent twice
+        const replayed = state.replayed;
+        try {
+            state.subscription =
+                previous?.ws.readyState === WebSocket.OPEN
+                    ? previous.subscription
+                    : this.subscriber.subscribe(conversationChannel(conv));
+            await state.subscription;
+            const stored = await this.activityStore.after(conv, afterSeq);
+            if (stored.length > 0) {
+                this.send(ws, {
+                    activities: stored.map(s => s.activity),
+                    watermark: stored[stored.length - 1].cursor ?? String(stored[stored.length - 1].seq)
+                });
+                stored.filter(s => !s.cursor).forEach(s => replayed.add(s.seq));
+                state.replayExpiresAt = Date.now() + ACTIVITY_RETENTION_MS;
+                state.lastSeq = Math.max(state.lastSeq, stored[stored.length - 1].seq);
+                state.lastCursor = stored[stored.length - 1].cursor ?? state.lastCursor;
+            }
+        } catch (e: unknown) {
+            this.logger.error(`Replay failed for conversation ${conv}: ${String(e)}`);
+            ws.close(INTERNAL_ERROR);
+        } finally {
+            state.replaying = false;
+            for (const message of state.queued) {
+                this.sendLive(state, message);
+            }
+            state.queued = [];
+        }
+        // The socket may have closed while we were subscribing; drop a subscription nobody uses
+        if (!this.sockets.has(conv)) {
+            await this.unsubscribe(conv);
         }
     }
 
-    async sendToConversation(convId: string, activityPayload: Transcript) {
-        // Retry three times (if client is taking long to connect)
-        for (let i = 1; i <= 3; i++) {
-            const wsConnection = this.socketMeta.get(convId);
-            if (wsConnection) {
-                // Direct string transmission
-                wsConnection.send(JSON.stringify(activityPayload));
+    onChannelMessage(channel: string, raw: string) {
+        if (!channel.startsWith(CHANNEL_PREFIX)) {
+            return;
+        }
+        const state = this.sockets.get(channel.slice(CHANNEL_PREFIX.length));
+        if (!state) {
+            return;
+        }
+        let message: ConversationMessage;
+        try {
+            message = JSON.parse(raw) as ConversationMessage;
+        } catch {
+            this.logger.warn(`Dropping malformed message on ${channel}`);
+            return;
+        }
+        if (state.replaying) {
+            state.queued.push(message);
+            return;
+        }
+        this.sendLive(state, message);
+    }
+
+    /**
+     * Messages published while the subscriber was disconnected are never delivered, and the socket
+     * would not notice. Close held sockets so clients reconnect with their watermark and replay.
+     */
+    onSubscriberClosed() {
+        if (this.sockets.size === 0) {
+            return;
+        }
+        this.logger.warn(`Redis subscriber disconnected; closing ${this.sockets.size} sockets for replay`);
+        for (const { ws } of this.sockets.values()) {
+            ws.close(INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Rolling deploy: stop taking traffic, give k8s time to remove this pod from endpoints, then close
+     * sockets with 1001. DirectLine clients reconnect to another pod and replay from the store.
+     * Runs before the HTTP server and the Redis clients close.
+     */
+    async beforeApplicationShutdown() {
+        this.drainState.start();
+        this.logger.log(`Draining for ${this.drainMs} ms`);
+        await new Promise(resolve => setTimeout(resolve, this.drainMs));
+        for (const { ws } of this.sockets.values()) {
+            ws.close(GOING_AWAY);
+        }
+        this.sockets.clear();
+        await this.subscriber.unsubscribe().catch((e: unknown) => this.logger.warn(`Unsubscribe failed: ${String(e)}`));
+        this.wss?.close();
+    }
+
+    private onClose(conv: string, ws: WebSocket) {
+        if (this.sockets.get(conv)?.ws !== ws) {
+            return;
+        }
+        this.sockets.delete(conv);
+        void this.unsubscribe(conv);
+    }
+
+    private async unsubscribe(conv: string) {
+        try {
+            await this.subscriber.unsubscribe(conversationChannel(conv));
+        } catch (e: unknown) {
+            this.logger.warn(`Unsubscribe failed for conversation ${conv}: ${String(e)}`);
+        }
+    }
+
+    /**
+     * Delivery cursors order new messages and suppress replay/live duplicates. Legacy messages keep
+     * their prior monotonic-watermark behavior and never overwrite a versioned cursor.
+     */
+    private sendLive(state: SocketState, message: ConversationMessage) {
+        if (isDeliveryCursor(message.cursor)) {
+            if (state.lastCursor && compareDeliveryCursors(message.cursor, state.lastCursor) <= 0) {
                 return;
             }
-            this.logger.verbose(`Retrying sending to conversation ${convId} (was not registered)`);
-            // Exponential retry
-            await new Promise(resolve => {
-                setTimeout(resolve, 1000 * i);
-            });
+            this.send(state.ws, toFrame(message));
+            state.lastCursor = message.cursor;
+            return;
         }
-        this.logger.warn(`Could not send transcript to conversation ${convId}`);
+        if (Date.now() >= state.replayExpiresAt) {
+            state.replayed.clear();
+        }
+        if (message.seq !== null && state.replayed.has(message.seq)) {
+            return;
+        }
+        if (message.seq !== null && (state.lastCursor || message.seq <= state.lastSeq)) {
+            this.send(state.ws, { activities: [message.activity] });
+            return;
+        }
+        this.send(state.ws, toFrame(message));
+        if (message.seq !== null) {
+            state.lastSeq = message.seq;
+        }
+    }
+
+    private send(ws: WebSocket, frame: ActivitySetFrame) {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(frame));
+        }
     }
 }
