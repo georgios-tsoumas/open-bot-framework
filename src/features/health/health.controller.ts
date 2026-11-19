@@ -4,14 +4,24 @@ import Redis from 'ioredis';
 import { DataSource } from 'typeorm';
 import { REDIS_CLIENT, REDIS_SUBSCRIBER } from '../redis/redis.constants';
 import { DrainStateService } from './drain-state.service';
+import { SocketLoadService } from './socket-load.service';
 
 const CHECK_TIMEOUT_MS = 1000;
 
 type CheckResult = 'ok' | 'down';
 
+type Checks = { redis: CheckResult; subscriber: CheckResult; db: CheckResult };
+
 interface ReadinessResponse {
     status: 'ok' | 'fail' | 'draining';
-    checks?: { redis: CheckResult; subscriber: CheckResult; db: CheckResult };
+    checks?: Checks;
+}
+
+interface LoadResponse {
+    status: 'ok' | 'fail' | 'full' | 'draining';
+    checks?: Checks;
+    sockets?: number;
+    maxSockets?: number | null;
 }
 
 /** Resolves 'ok' if the check finishes in time, 'down' if it throws or times out. */
@@ -36,7 +46,8 @@ export class HealthController {
         @Inject(REDIS_CLIENT) private readonly redis: Redis,
         @Inject(REDIS_SUBSCRIBER) private readonly subscriber: Redis,
         private readonly dataSource: DataSource,
-        private readonly drainState: DrainStateService
+        private readonly drainState: DrainStateService,
+        private readonly socketLoad: SocketLoadService
     ) {}
 
     /**
@@ -59,14 +70,38 @@ export class HealthController {
             reply.status(503);
             return { status: 'draining' };
         }
+        const checks = await this.runChecks();
+        const healthy = Object.values(checks).every(result => result === 'ok');
+        reply.status(healthy ? 200 : 503);
+        return { status: healthy ? 'ok' : 'fail', checks };
+    }
+
+    /**
+     * GET /health/load
+     * Load balancer probe. 503 while draining, when a readiness check fails, or once open sockets reach
+     * MAX_WS_CONNECTIONS, so the LB sends new traffic elsewhere. k8s keeps using /health/ready, so a
+     * full pod is not treated as unhealthy. Soft limit: upgrades are never refused at the cap.
+     */
+    @Get('load')
+    async load(@Res({ passthrough: true }) reply: FastifyReply): Promise<LoadResponse> {
+        if (this.drainState.isDraining()) {
+            reply.status(503);
+            return { status: 'draining' };
+        }
+        const checks = await this.runChecks();
+        const healthy = Object.values(checks).every(result => result === 'ok');
+        const status = !healthy ? 'fail' : this.socketLoad.isFull() ? 'full' : 'ok';
+        reply.status(status === 'ok' ? 200 : 503);
+        return { status, checks, sockets: this.socketLoad.count(), maxSockets: this.socketLoad.maxSockets };
+    }
+
+    /** Runs the Redis, subscriber and DB checks shared by readiness and load. */
+    private async runChecks(): Promise<Checks> {
         const [redis, db] = await Promise.all([
             probe(() => this.redis.ping()),
             probe(() => this.dataSource.query('SELECT 1'))
         ]);
         const subscriber: CheckResult = this.subscriber.status === 'ready' ? 'ok' : 'down';
-        const checks = { redis, subscriber, db };
-        const healthy = Object.values(checks).every(result => result === 'ok');
-        reply.status(healthy ? 200 : 503);
-        return { status: healthy ? 'ok' : 'fail', checks };
+        return { redis, subscriber, db };
     }
 }

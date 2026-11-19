@@ -8,6 +8,7 @@ import Redis from 'ioredis';
 import { WebSocket } from 'ws';
 import { WebChatService } from '../channels/webchat/webchat.service';
 import { DrainStateService } from '../health/drain-state.service';
+import { SocketLoadService } from '../health/socket-load.service';
 import { ACTIVITY_RETENTION_MS, ActivityStoreService } from './activity-store.service';
 import { StoredActivity } from './conversation-stream.types';
 import { DirectlineTokenService } from './dirtectline-token.service';
@@ -39,6 +40,7 @@ describe('DirectLineGateway', () => {
     let subscriber: { subscribe: jest.Mock; unsubscribe: jest.Mock; on: jest.Mock };
     let store: { after: jest.Mock };
     let drainState: DrainStateService;
+    let socketLoad: SocketLoadService;
 
     const connect = async (url: string) => {
         const ws = new FakeSocket();
@@ -55,11 +57,13 @@ describe('DirectLineGateway', () => {
         };
         store = { after: jest.fn().mockResolvedValue([]) };
         drainState = new DrainStateService();
+        socketLoad = new SocketLoadService(configService);
         gateway = new DirectLineGateway(
             tokenService,
             store as unknown as ActivityStoreService,
             subscriber as unknown as Redis,
             drainState,
+            socketLoad,
             configService
         );
     });
@@ -75,6 +79,7 @@ describe('DirectLineGateway', () => {
                 store as unknown as ActivityStoreService,
                 subscriber as unknown as Redis,
                 drainState,
+                socketLoad,
                 { get: (key: string) => (key === 'SOCKET_PORT' ? String(port) : undefined) } as unknown as ConfigService
             );
 
@@ -398,6 +403,7 @@ describe('DirectLineGateway', () => {
                 store as unknown as ActivityStoreService,
                 subscriber as unknown as Redis,
                 drainState,
+                socketLoad,
                 { get: (key: string) => (key === 'SOCKET_PORT' ? '0' : undefined) } as unknown as ConfigService
             );
             try {
@@ -406,6 +412,35 @@ describe('DirectLineGateway', () => {
             } finally {
                 started['wss']?.close();
             }
+        });
+    });
+
+    describe('socket load reporting', () => {
+        it('reports held sockets on connect, replace and close', async () => {
+            const first = await connect(streamPath(token));
+            expect(socketLoad.count()).toBe(1);
+            const replacement = await connect(streamPath(token));
+            expect(socketLoad.count()).toBe(1);
+            first.emit('close');
+            expect(socketLoad.count()).toBe(1);
+            replacement.emit('close');
+            expect(socketLoad.count()).toBe(0);
+        });
+
+        it('reports zero after the shutdown drain closes all sockets', async () => {
+            const drained = new DirectLineGateway(
+                tokenService,
+                store as unknown as ActivityStoreService,
+                subscriber as unknown as Redis,
+                drainState,
+                socketLoad,
+                { get: (key: string) => (key === 'SHUTDOWN_DRAIN_MS' ? '0' : undefined) } as unknown as ConfigService
+            );
+            const ws = new FakeSocket();
+            await drained.handleConnection(ws as unknown as WebSocket, { url: streamPath(token) } as IncomingMessage);
+            expect(socketLoad.count()).toBe(1);
+            await drained.beforeApplicationShutdown();
+            expect(socketLoad.count()).toBe(0);
         });
     });
 });

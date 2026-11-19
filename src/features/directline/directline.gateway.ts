@@ -13,6 +13,7 @@ import Redis from 'ioredis';
 import { WebSocket, WebSocketServer } from 'ws';
 import { REDIS_SUBSCRIBER } from '../redis/redis.constants';
 import { DrainStateService } from '../health/drain-state.service';
+import { SocketLoadService } from '../health/socket-load.service';
 import { ACTIVITY_RETENTION_MS, ActivityStoreService } from './activity-store.service';
 import {
     ActivitySetFrame,
@@ -68,6 +69,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         private readonly activityStore: ActivityStoreService,
         @Inject(REDIS_SUBSCRIBER) private readonly subscriber: Redis,
         private readonly drainState: DrainStateService,
+        private readonly socketLoad: SocketLoadService,
         configService: ConfigService
     ) {
         this.socketPort = Number(configService.get<string>('SOCKET_PORT'));
@@ -149,6 +151,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             lastCursor: typeof afterSeq === 'string' ? afterSeq : undefined
         };
         this.sockets.set(conv, state);
+        this.socketLoad.update(this.sockets.size);
         this.logger.verbose(`Web-socket connected for conversation ${conv}`);
         ws.on('close', () => this.onClose(conv, ws));
         ws.on('error', (err: Error) => {
@@ -239,6 +242,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             ws.close(GOING_AWAY);
         }
         this.sockets.clear();
+        this.socketLoad.update(0);
         await this.subscriber.unsubscribe().catch((e: unknown) => this.logger.warn(`Unsubscribe failed: ${String(e)}`));
         this.wss?.close();
     }
@@ -248,6 +252,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             return;
         }
         this.sockets.delete(conv);
+        this.socketLoad.update(this.sockets.size);
         void this.unsubscribe(conv);
     }
 

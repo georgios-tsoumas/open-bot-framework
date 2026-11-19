@@ -41,6 +41,13 @@ Rate-limit counters are shared under `obf:rl:`.
   listener, and ingress WebSocket idle timeout must exceed 20 seconds.
 - Use `/health` for liveness and `/health/ready` for readiness. Readiness checks
   Redis commands, subscriber status and the database, and returns 503 while draining.
+- Point the load balancer probe at `GET /health/load` on `PORT`, healthy = 200.
+  It runs the readiness checks and returns `sockets` (open WebSockets on this pod)
+  and `maxSockets`. It answers 503 with status `draining`, `fail` (a check is down)
+  or `full` (`sockets` >= `MAX_WS_CONNECTIONS`). Unset `MAX_WS_CONNECTIONS` means
+  no cap (`maxSockets: null`). The cap is soft: upgrades are never refused, so a
+  few sockets can land between probes. If the LB has a separate backend for
+  `SOCKET_PORT`, point its probe at the same HTTP path and port.
 - On shutdown, readiness fails and new sockets are refused before the gateway
   waits `SHUTDOWN_DRAIN_MS` (default 5000), then closes sockets with code 1001.
   The termination grace period must exceed this drain time.

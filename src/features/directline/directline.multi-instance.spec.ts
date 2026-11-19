@@ -15,6 +15,7 @@ import { AtomicOperationsService } from '../atomicity/atomic-operations.service'
 import { AuthorizationService } from '../authorization/authorization.service';
 import { WebChatService } from '../channels/webchat/webchat.service';
 import { DrainStateService } from '../health/drain-state.service';
+import { SocketLoadService } from '../health/socket-load.service';
 import { OpenBotService } from '../openbot/openbot.service';
 import { OpenBotSecretService } from '../openbotsecret/openbotsecret.service';
 import { REDIS_CLIENT, REDIS_SUBSCRIBER } from '../redis/redis.constants';
@@ -137,6 +138,7 @@ integration('DirectLine across two HTTP/WebSocket replicas and real Redis', () =
                     AtomicOperationsService,
                     AuthorizationService,
                     DrainStateService,
+                    SocketLoadService,
                     { provide: ConfigService, useValue: config },
                     { provide: JwtService, useValue: jwt },
                     { provide: REDIS_CLIENT, useValue: redis },
