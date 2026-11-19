@@ -13,7 +13,7 @@ import Redis from 'ioredis';
 import { WebSocket, WebSocketServer } from 'ws';
 import { REDIS_SUBSCRIBER } from '../redis/redis.constants';
 import { DrainStateService } from '../health/drain-state.service';
-import { ActivityStoreService } from './activity-store.service';
+import { ACTIVITY_RETENTION_MS, ActivityStoreService } from './activity-store.service';
 import {
     ActivitySetFrame,
     CHANNEL_PREFIX,
@@ -34,8 +34,9 @@ const STREAM_PATH = /^\/v3\/directline\/conversations\/([^/]+)\/stream$/;
 interface SocketState {
     ws: WebSocket;
     subscription: Promise<unknown>;
-    /** Retained after replay because publication can arrive after the replay has finished. */
+    /** Retained for the replay window because publication can arrive after replay has finished. */
     replayed: Set<number>;
+    replayExpiresAt: number;
     /** True while stored activities are being replayed; live messages wait in `queued`. */
     replaying: boolean;
     queued: ConversationMessage[];
@@ -138,6 +139,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             ws,
             subscription: Promise.resolve(),
             replayed: new Set(),
+            replayExpiresAt: 0,
             replaying: true,
             queued: [],
             lastSeq: afterSeq
@@ -164,6 +166,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
                     watermark: String(stored[stored.length - 1].seq)
                 });
                 stored.forEach(s => replayed.add(s.seq));
+                state.replayExpiresAt = Date.now() + ACTIVITY_RETENTION_MS;
                 state.lastSeq = Math.max(state.lastSeq, stored[stored.length - 1].seq);
             }
         } catch (e: unknown) {
@@ -259,6 +262,9 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
      * watermark and the client keeps the higher one.
      */
     private sendLive(state: SocketState, message: ConversationMessage) {
+        if (Date.now() >= state.replayExpiresAt) {
+            state.replayed.clear();
+        }
         if (message.seq !== null && state.replayed.has(message.seq)) {
             return;
         }

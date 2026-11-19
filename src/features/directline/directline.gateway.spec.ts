@@ -8,7 +8,7 @@ import Redis from 'ioredis';
 import { WebSocket } from 'ws';
 import { WebChatService } from '../channels/webchat/webchat.service';
 import { DrainStateService } from '../health/drain-state.service';
-import { ActivityStoreService } from './activity-store.service';
+import { ACTIVITY_RETENTION_MS, ActivityStoreService } from './activity-store.service';
 import { StoredActivity } from './conversation-stream.types';
 import { DirectlineTokenService } from './dirtectline-token.service';
 import { DirectLineGateway } from './directline.gateway';
@@ -282,6 +282,20 @@ describe('DirectLineGateway', () => {
     });
 
     describe('publication arriving after replay', () => {
+        it('expires replay deduplication so a reused sequence is not suppressed indefinitely', async () => {
+            const startedAt = Date.now();
+            const now = jest.spyOn(Date, 'now').mockReturnValue(startedAt);
+            try {
+                store.after.mockResolvedValueOnce([stored(7)]);
+                const ws = await connect(streamPath(token, '5'));
+                now.mockReturnValue(startedAt + ACTIVITY_RETENTION_MS);
+                gateway.onChannelMessage('obf:conv:conv1', message(7));
+                expect(ws.frames()).toHaveLength(2);
+            } finally {
+                now.mockRestore();
+            }
+        });
+
         it('does not resend an activity already delivered by the replay', async () => {
             store.after.mockResolvedValueOnce([stored(6), stored(7)]);
             const ws = await connect(streamPath(token, '5'));
@@ -294,14 +308,31 @@ describe('DirectLineGateway', () => {
             store.after.mockResolvedValueOnce([stored(7)]);
             const ws = await connect(streamPath(token, '5'));
             gateway.onChannelMessage('obf:conv:conv1', message(6));
-            expect(ws.frames()).toEqual([
-                { activities: [activity(7)], watermark: '7' },
-                { activities: [activity(6)] }
-            ]);
+            expect(ws.frames()).toEqual([{ activities: [activity(7)], watermark: '7' }, { activities: [activity(6)] }]);
         });
     });
 
     describe('overlapping reconnect subscriptions', () => {
+        it('closes both sockets if their shared subscription fails', async () => {
+            let rejectSubscription: (reason: Error) => void = () => undefined;
+            subscriber.subscribe.mockReturnValueOnce(new Promise((_resolve, reject) => (rejectSubscription = reject)));
+            const older = new FakeSocket();
+            const newer = new FakeSocket();
+            const first = gateway.handleConnection(
+                older as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            const second = gateway.handleConnection(
+                newer as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            rejectSubscription(new Error('subscriber unavailable'));
+            await Promise.all([first, second]);
+            expect(older.close).toHaveBeenCalledWith(1011);
+            expect(newer.close).toHaveBeenCalledWith(1011);
+            expect(store.after).not.toHaveBeenCalled();
+        });
+
         it('waits for the original subscription before replaying on a replacement socket', async () => {
             let subscribed: (value: number) => void = () => undefined;
             subscriber.subscribe.mockReturnValueOnce(new Promise<number>(resolve => (subscribed = resolve)));
