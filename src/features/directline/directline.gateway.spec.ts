@@ -281,6 +281,36 @@ describe('DirectLineGateway', () => {
         });
     });
 
+    describe('overlapping reconnect subscriptions', () => {
+        it('waits for the original subscription before replaying on a replacement socket', async () => {
+            let subscribed: (value: number) => void = () => undefined;
+            subscriber.subscribe.mockReturnValueOnce(new Promise<number>(resolve => (subscribed = resolve)));
+            const older = new FakeSocket();
+            const newer = new FakeSocket();
+            const first = gateway.handleConnection(
+                older as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            const second = gateway.handleConnection(
+                newer as unknown as WebSocket,
+                { url: streamPath(token) } as IncomingMessage
+            );
+            await Promise.resolve();
+            expect(store.after).not.toHaveBeenCalled();
+            subscribed(1);
+            await Promise.all([first, second]);
+            expect(store.after).toHaveBeenCalledTimes(2);
+            expect(subscriber.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        it('subscribes again when replacing a closing socket', async () => {
+            const older = await connect(streamPath(token));
+            older.readyState = WebSocket.CLOSING;
+            await connect(streamPath(token));
+            expect(subscriber.subscribe).toHaveBeenCalledTimes(2);
+        });
+    });
+
     describe('Redis subscriber disconnect', () => {
         it('closes held sockets with 1011 so clients reconnect and replay', async () => {
             const ws = await connect(streamPath(token));

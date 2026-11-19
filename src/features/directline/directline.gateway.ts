@@ -33,6 +33,7 @@ const STREAM_PATH = /^\/v3\/directline\/conversations\/([^/]+)\/stream$/;
 
 interface SocketState {
     ws: WebSocket;
+    subscription: Promise<unknown>;
     /** True while stored activities are being replayed; live messages wait in `queued`. */
     replaying: boolean;
     queued: ConversationMessage[];
@@ -130,8 +131,14 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
 
         // A newer socket for the same conversation replaces this one; only remove the entry we own.
         // The channel subscription belongs to the map entry, so a replacement keeps it.
-        const subscribed = this.sockets.has(conv);
-        const state: SocketState = { ws, replaying: true, queued: [], lastSeq: afterSeq };
+        const previous = this.sockets.get(conv);
+        const state: SocketState = {
+            ws,
+            subscription: Promise.resolve(),
+            replaying: true,
+            queued: [],
+            lastSeq: afterSeq
+        };
         this.sockets.set(conv, state);
         this.logger.verbose(`Web-socket connected for conversation ${conv}`);
         ws.on('close', () => this.onClose(conv, ws));
@@ -142,9 +149,11 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         // Seqs sent in the replay, so a queued live copy of the same activity is not sent twice
         const replayed = new Set<number>();
         try {
-            if (!subscribed) {
-                await this.subscriber.subscribe(conversationChannel(conv));
-            }
+            state.subscription =
+                previous?.ws.readyState === WebSocket.OPEN
+                    ? previous.subscription
+                    : this.subscriber.subscribe(conversationChannel(conv));
+            await state.subscription;
             const stored = await this.activityStore.after(conv, afterSeq);
             if (stored.length > 0) {
                 this.send(ws, {
