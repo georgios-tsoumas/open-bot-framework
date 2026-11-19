@@ -1,0 +1,6 @@
+# node_modules: symlink from main checkout (avoid npm install / GitHub Packages auth)
+symlink:node_modules
+
+# Environment files (copy - may need worktree-specific overrides)
+# Note: .env is tracked in git (no need to include)
+symlink:.env.local.dev

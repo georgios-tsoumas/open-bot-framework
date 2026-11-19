@@ -1,0 +1,150 @@
+name: pipeline
+
+on:
+  push:
+    branches:
+      - main 
+      - staging
+      - develop
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PAT_TOKEN }}
+      - run: npm test
+
+  audit:
+    name: Sonarqube audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: get-npm-version
+        id: package-version
+        uses: martinbeentjes/npm-get-version-action@main
+      - uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectVersion=${{ steps.package-version.outputs.current-version }}
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1-node16
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: eu-central-1
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Set image tag name
+      id: vars
+      run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Deploy to dev env
+      if: github.ref == 'refs/heads/develop'
+      uses: kodermax/kubectl-aws-eks@master
+      env:
+        KUBECTL_VERSION: "v1.22.0"
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA_NEW }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        KUBE_NAMESPACE: helvia-dev
+      with:
+        args: -n $KUBE_NAMESPACE set image deployment/$ECR_REPOSITORY $ECR_REPOSITORY=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Check deployment to dev env
+      if: github.ref == 'refs/heads/develop'
+      uses: kodermax/kubectl-aws-eks@master
+      env:
+        KUBECTL_VERSION: "v1.22.0"
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA_NEW }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        KUBE_NAMESPACE: helvia-dev
+      with:
+        args: -n $KUBE_NAMESPACE rollout status deployment $ECR_REPOSITORY --timeout=600s
+
+    - name: Deploy to staging env
+      if: github.ref == 'refs/heads/staging'
+      uses: kodermax/kubectl-aws-eks@master
+      env:
+        KUBECTL_VERSION: "v1.22.0"
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA_NEW }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        KUBE_NAMESPACE: helvia-stg
+      with:
+        args: -n $KUBE_NAMESPACE set image deployment/$ECR_REPOSITORY $ECR_REPOSITORY=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Check deployment to staging env
+      if: github.ref == 'refs/heads/staging'
+      uses: kodermax/kubectl-aws-eks@master
+      env:
+        KUBECTL_VERSION: "v1.22.0"
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA_NEW }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        KUBE_NAMESPACE: helvia-stg
+      with:
+        args: -n $KUBE_NAMESPACE rollout status deployment $ECR_REPOSITORY --timeout=600s
+
+    - name: Deploy to production env
+      if: github.ref == 'refs/heads/main'
+      uses: kodermax/kubectl-aws-eks@master
+      env:
+        KUBECTL_VERSION: "v1.22.0"
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA_NEW }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        KUBE_NAMESPACE: helvia
+      with:
+        args: -n $KUBE_NAMESPACE set image deployment/$ECR_REPOSITORY $ECR_REPOSITORY=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Check deployment to production env
+      if: github.ref == 'refs/heads/main'
+      uses: kodermax/kubectl-aws-eks@master
+      env:
+        KUBECTL_VERSION: "v1.22.0"
+        KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA_NEW }}
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: open-bot-framework
+        IMAGE_TAG: ${{ steps.vars.outputs.sha_short }}
+        KUBE_NAMESPACE: helvia
+      with: 
+        args: -n $KUBE_NAMESPACE rollout status deployment $ECR_REPOSITORY --timeout=600s

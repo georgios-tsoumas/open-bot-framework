@@ -1,3 +1,5 @@
+// Keep first: starts the APM agent before any instrumented module is loaded
+import './apm';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestFastifyApplication, FastifyAdapter } from '@nestjs/platform-fastify';

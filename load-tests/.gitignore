@@ -1,0 +1,5 @@
+# JMeter run output
+results/
+report/
+*.jtl
+jmeter.log
