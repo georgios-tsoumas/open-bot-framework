@@ -18,7 +18,9 @@ import {
     ActivitySetFrame,
     CHANNEL_PREFIX,
     ConversationMessage,
+    compareDeliveryCursors,
     conversationChannel,
+    isDeliveryCursor,
     isWatermark,
     toFrame
 } from './conversation-stream.types';
@@ -40,8 +42,9 @@ interface SocketState {
     /** True while stored activities are being replayed; live messages wait in `queued`. */
     replaying: boolean;
     queued: ConversationMessage[];
-    /** Highest seq sent to this socket, i.e. the client's watermark. */
+    /** Highest legacy activity sequence sent before switching to delivery cursors. */
     lastSeq: number;
+    lastCursor?: string;
 }
 
 /**
@@ -110,7 +113,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
 
     async handleConnection(ws: WebSocket, req: IncomingMessage): Promise<void> {
         let conv: string;
-        let afterSeq: number;
+        let afterSeq: number | string;
         try {
             const parsedUrl = new URL(`wss://server${req?.url ?? ''}`);
             const token = parsedUrl.searchParams.get('t');
@@ -125,7 +128,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             conv = directLineTokenPayload.conv;
             // No watermark: replay everything stored
             const watermark = parsedUrl.searchParams.get('watermark');
-            afterSeq = isWatermark(watermark) ? Number(watermark) : -1;
+            afterSeq = isDeliveryCursor(watermark) ? watermark : isWatermark(watermark) ? Number(watermark) : -1;
         } catch (e: unknown) {
             ws.send(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
             ws.close(POLICY_VIOLATION);
@@ -142,7 +145,8 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             replayExpiresAt: 0,
             replaying: true,
             queued: [],
-            lastSeq: afterSeq
+            lastSeq: typeof afterSeq === 'number' ? afterSeq : -1,
+            lastCursor: typeof afterSeq === 'string' ? afterSeq : undefined
         };
         this.sockets.set(conv, state);
         this.logger.verbose(`Web-socket connected for conversation ${conv}`);
@@ -163,11 +167,12 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
             if (stored.length > 0) {
                 this.send(ws, {
                     activities: stored.map(s => s.activity),
-                    watermark: String(stored[stored.length - 1].seq)
+                    watermark: stored[stored.length - 1].cursor ?? String(stored[stored.length - 1].seq)
                 });
-                stored.forEach(s => replayed.add(s.seq));
+                stored.filter(s => !s.cursor).forEach(s => replayed.add(s.seq));
                 state.replayExpiresAt = Date.now() + ACTIVITY_RETENTION_MS;
                 state.lastSeq = Math.max(state.lastSeq, stored[stored.length - 1].seq);
+                state.lastCursor = stored[stored.length - 1].cursor ?? state.lastCursor;
             }
         } catch (e: unknown) {
             this.logger.error(`Replay failed for conversation ${conv}: ${String(e)}`);
@@ -175,9 +180,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         } finally {
             state.replaying = false;
             for (const message of state.queued) {
-                if (message.seq === null || !replayed.has(message.seq)) {
-                    this.sendLive(state, message);
-                }
+                this.sendLive(state, message);
             }
             state.queued = [];
         }
@@ -257,18 +260,25 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
     }
 
     /**
-     * Send a live message without ever moving the client's watermark back. The user's echo is published
-     * after the bot's turn, so it can arrive after replies with higher seqs; it then goes without a
-     * watermark and the client keeps the higher one.
+     * Delivery cursors order new messages and suppress replay/live duplicates. Legacy messages keep
+     * their prior monotonic-watermark behavior and never overwrite a versioned cursor.
      */
     private sendLive(state: SocketState, message: ConversationMessage) {
+        if (isDeliveryCursor(message.cursor)) {
+            if (state.lastCursor && compareDeliveryCursors(message.cursor, state.lastCursor) <= 0) {
+                return;
+            }
+            this.send(state.ws, toFrame(message));
+            state.lastCursor = message.cursor;
+            return;
+        }
         if (Date.now() >= state.replayExpiresAt) {
             state.replayed.clear();
         }
         if (message.seq !== null && state.replayed.has(message.seq)) {
             return;
         }
-        if (message.seq !== null && message.seq <= state.lastSeq) {
+        if (message.seq !== null && (state.lastCursor || message.seq <= state.lastSeq)) {
             this.send(state.ws, { activities: [message.activity] });
             return;
         }

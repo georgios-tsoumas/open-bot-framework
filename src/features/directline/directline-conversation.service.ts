@@ -216,7 +216,7 @@ export class DirectlineConversationService {
      * @param conversationId Conversation id for id generation and object pathing
      * @param activity Activity object to enrich (mutated in place and returned)
      * @param files Optional array of UploadDto to persist and attach
-     * @returns Enriched Activity and its sequence number (the watermark; null for typing)
+     * @returns Enriched Activity and its ID sequence number (null for typing)
      */
     private async createActivity(
         conversationId: string,
@@ -227,8 +227,8 @@ export class DirectlineConversationService {
             await this.storageService.uploadToActivity(files, conversationId, activity);
         }
 
-        // The watermark is this same number, so a reconnecting client resumes right after the last
-        // activity it saw
+        // Activity identity is independent of publication order. Redis assigns the delivery cursor
+        // when the publisher atomically stores and emits the activity.
         let seq: number | null = null;
         if (activity.type !== 'typing') {
             seq = await this.atomicOperationService.incr(conversationId);

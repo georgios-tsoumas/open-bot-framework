@@ -19,7 +19,8 @@ export class ConversationPublisher {
     /** @param seq - the activity's sequence number, or null for typing (not stored). */
     async publish(conversationId: string, activity: Activity, seq: number | null): Promise<void> {
         if (seq !== null) {
-            await this.activityStore.save(conversationId, seq, activity);
+            await this.activityStore.saveAndPublish(conversationId, seq, activity);
+            return;
         }
         const message: ConversationMessage = { seq, activity };
         await this.redis.publish(conversationChannel(conversationId), JSON.stringify(message));

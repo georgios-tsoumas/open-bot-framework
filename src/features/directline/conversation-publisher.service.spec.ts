@@ -5,28 +5,27 @@ import { ConversationPublisher } from './conversation-publisher.service';
 
 describe('ConversationPublisher', () => {
     const redis = { publish: jest.fn().mockResolvedValue(1) };
-    const store = { save: jest.fn().mockResolvedValue(undefined) };
+    const store = { saveAndPublish: jest.fn().mockResolvedValue(undefined) };
     const publisher = new ConversationPublisher(redis as unknown as Redis, store as unknown as ActivityStoreService);
 
     beforeEach(() => jest.clearAllMocks());
 
-    it('stores a numbered activity before publishing it', async () => {
+    it('stores and publishes a numbered activity atomically', async () => {
         const activity = { id: 'conv1|0000002', type: 'message' } as Activity;
         await publisher.publish('conv1', activity, 2);
-        expect(store.save).toHaveBeenCalledWith('conv1', 2, activity);
-        expect(redis.publish).toHaveBeenCalledWith('obf:conv:conv1', JSON.stringify({ seq: 2, activity }));
-        expect(store.save.mock.invocationCallOrder[0]).toBeLessThan(redis.publish.mock.invocationCallOrder[0]);
+        expect(store.saveAndPublish).toHaveBeenCalledWith('conv1', 2, activity);
+        expect(redis.publish).not.toHaveBeenCalled();
     });
 
     it('publishes typing without storing it', async () => {
         const activity = { type: 'typing' } as Activity;
         await publisher.publish('conv1', activity, null);
-        expect(store.save).not.toHaveBeenCalled();
+        expect(store.saveAndPublish).not.toHaveBeenCalled();
         expect(redis.publish).toHaveBeenCalledWith('obf:conv:conv1', JSON.stringify({ seq: null, activity }));
     });
 
     it('does not publish when storing fails', async () => {
-        store.save.mockRejectedValueOnce(new Error('redis down'));
+        store.saveAndPublish.mockRejectedValueOnce(new Error('redis down'));
         await expect(publisher.publish('conv1', {} as Activity, 1)).rejects.toThrow('redis down');
         expect(redis.publish).not.toHaveBeenCalled();
     });

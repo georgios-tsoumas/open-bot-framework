@@ -281,6 +281,29 @@ describe('DirectLineGateway', () => {
         });
     });
 
+    describe('delivery cursors', () => {
+        it('replays and deduplicates by publication cursor rather than activity sequence', async () => {
+            store.after.mockResolvedValueOnce([
+                { ...stored(9), cursor: 'v2:100-0' },
+                { ...stored(1), cursor: 'v2:100-1' }
+            ]);
+            const ws = await connect(streamPath(token, 'v2:99-0'));
+            expect(store.after).toHaveBeenCalledWith('conv1', 'v2:99-0');
+            gateway.onChannelMessage(
+                'obf:conv:conv1',
+                JSON.stringify({ seq: 1, cursor: 'v2:100-1', activity: activity(1) })
+            );
+            gateway.onChannelMessage(
+                'obf:conv:conv1',
+                JSON.stringify({ seq: 0, cursor: 'v2:100-2', activity: activity(0) })
+            );
+            expect(ws.frames()).toEqual([
+                { activities: [activity(9), activity(1)], watermark: 'v2:100-1' },
+                { activities: [activity(0)], watermark: 'v2:100-2' }
+            ]);
+        });
+    });
+
     describe('publication arriving after replay', () => {
         it('expires replay deduplication so a reused sequence is not suppressed indefinitely', async () => {
             const startedAt = Date.now();
