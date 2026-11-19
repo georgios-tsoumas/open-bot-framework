@@ -281,6 +281,26 @@ describe('DirectLineGateway', () => {
         });
     });
 
+    describe('publication arriving after replay', () => {
+        it('does not resend an activity already delivered by the replay', async () => {
+            store.after.mockResolvedValueOnce([stored(6), stored(7)]);
+            const ws = await connect(streamPath(token, '5'));
+            gateway.onChannelMessage('obf:conv:conv1', message(6));
+            gateway.onChannelMessage('obf:conv:conv1', message(7));
+            expect(ws.frames()).toEqual([{ activities: [activity(6), activity(7)], watermark: '7' }]);
+        });
+
+        it('still delivers an unseen late echo whose sequence is below the replay watermark', async () => {
+            store.after.mockResolvedValueOnce([stored(7)]);
+            const ws = await connect(streamPath(token, '5'));
+            gateway.onChannelMessage('obf:conv:conv1', message(6));
+            expect(ws.frames()).toEqual([
+                { activities: [activity(7)], watermark: '7' },
+                { activities: [activity(6)] }
+            ]);
+        });
+    });
+
     describe('overlapping reconnect subscriptions', () => {
         it('waits for the original subscription before replaying on a replacement socket', async () => {
             let subscribed: (value: number) => void = () => undefined;

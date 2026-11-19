@@ -34,6 +34,8 @@ const STREAM_PATH = /^\/v3\/directline\/conversations\/([^/]+)\/stream$/;
 interface SocketState {
     ws: WebSocket;
     subscription: Promise<unknown>;
+    /** Retained after replay because publication can arrive after the replay has finished. */
+    replayed: Set<number>;
     /** True while stored activities are being replayed; live messages wait in `queued`. */
     replaying: boolean;
     queued: ConversationMessage[];
@@ -135,6 +137,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         const state: SocketState = {
             ws,
             subscription: Promise.resolve(),
+            replayed: new Set(),
             replaying: true,
             queued: [],
             lastSeq: afterSeq
@@ -147,7 +150,7 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
         });
 
         // Seqs sent in the replay, so a queued live copy of the same activity is not sent twice
-        const replayed = new Set<number>();
+        const replayed = state.replayed;
         try {
             state.subscription =
                 previous?.ws.readyState === WebSocket.OPEN
@@ -256,6 +259,9 @@ export class DirectLineGateway implements OnModuleInit, BeforeApplicationShutdow
      * watermark and the client keeps the higher one.
      */
     private sendLive(state: SocketState, message: ConversationMessage) {
+        if (message.seq !== null && state.replayed.has(message.seq)) {
+            return;
+        }
         if (message.seq !== null && message.seq <= state.lastSeq) {
             this.send(state.ws, { activities: [message.activity] });
             return;
